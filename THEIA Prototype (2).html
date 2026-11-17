@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>THEIA Prototype</title>
+<style>
+:root{--bg:#efefe9;--pn:#fff;--tx:#1a1a1a;--mu:#5d5d57;--ln:#d6d6cf;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1b1b1b;--pn:#262626;--tx:#f0f0f0;--mu:#a8a8a0;--ln:#3a3a3a}}
+:root[data-theme="dark"]{--bg:#1b1b1b;--pn:#262626;--tx:#f0f0f0;--mu:#a8a8a0;--ln:#3a3a3a}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;display:flex;flex-wrap:wrap;gap:24px;justify-content:center;align-items:flex-start;padding:20px}
+.ph{width:360px;max-width:100%;height:740px;background:#131313;color:#fff;border-radius:30px;border:1px solid #3a3a3a;display:flex;flex-direction:column;overflow:hidden;position:relative;font-size:calc(14px*var(--sz,1));--mu:#9d9d9d;--cd:#1f2023;--cl:#3a3b3f}
+.ph.hc{--mu:#fff;--cl:#fff}.ph.fr{background:#3a1010;--cd:#2a0c0c;--cl:#7a2a2a}
+.hd{display:flex;align-items:center;justify-content:space-between;padding:14px 18px 6px}
+.br{color:#f9e04b;letter-spacing:.12em}
+.pill{font-size:.72em;color:var(--mu);border:1px solid var(--cl);border-radius:20px;padding:3px 10px}
+.ib{background:none;border:1px solid var(--cl);color:#fff;border-radius:8px;width:36px;height:30px;font-size:1.1em}
+.sc{flex:1;overflow:auto;padding:8px 18px 14px;display:flex;flex-direction:column;gap:10px}
+.sm{color:var(--mu);font-size:.8em}
+h2{margin:0;font-size:1.45em;line-height:1.2}
+.btn,.b2,.cd{font:inherit;border-radius:10px;padding:12px 14px;border:1px solid var(--cl);text-align:left;width:100%;color:#fff;background:var(--cd)}
+.btn{background:#f9e04b;color:#111;font-weight:700;text-align:center;border-color:#f9e04b}
+.b2{text-align:center;font-weight:600}
+.rd{background:#8c2f2b;border-color:#8c2f2b}
+.gn{border-color:#3a8f4a;color:#7bd48a;text-align:center}
+.sel{border:2px solid #f9e04b}
+.big{font-size:3em;font-weight:700;text-align:center;line-height:1.1}
+.ctr{text-align:center}
+button{cursor:pointer}
+:focus-visible{outline:3px solid #f9e04b;outline-offset:2px}
+.ring{width:140px;height:140px;border-radius:50%;border:5px solid #8c2f2b;display:grid;place-items:center;font-size:4.5em;font-weight:700;margin:6px auto}
+@keyframes sp{to{transform:rotate(360deg)}}
+.spin{width:18px;height:18px;border:3px solid #8c2f2b;border-top-color:transparent;border-radius:50%;animation:sp 1s linear infinite;display:inline-block;vertical-align:middle}
+@media(prefers-reduced-motion:reduce){.spin{animation:none}}
+.live{border-top:1px solid var(--cl);padding:8px 18px;font-size:.78em;color:#f9e04b;min-height:44px}
+.ov{position:absolute;inset:0;background:#131313f2;padding:24px 18px;display:flex;flex-direction:column;gap:10px;overflow:auto;z-index:5}
+.ov:empty{display:none}
+.pn{width:340px;max-width:100%;background:var(--pn);border:1px solid var(--ln);border-radius:14px;padding:16px;font-size:.9em}
+.pn h3{margin:0 0 6px;font-size:1.05em}
+.pn p{margin:4px 0 10px;color:var(--mu)}
+.pn button{font:inherit;margin:3px 3px 3px 0;padding:7px 10px;border-radius:8px;border:1px solid var(--ln);background:transparent;color:var(--tx)}
+.pn button.on{background:#f9e04b;color:#111;border-color:#f9e04b}
+.pn input{font:inherit;padding:7px;border-radius:8px;border:1px solid var(--ln);background:transparent;color:var(--tx);width:200px}
+#log{height:180px;overflow:auto;font:12px/1.4 ui-monospace,Menlo,monospace;border:1px solid var(--ln);border-radius:8px;padding:6px}
+</style></head><body>
+<div class="ph" id="ph"><div class="hd" id="hd"></div><div class="sc" id="sc"></div><div class="live" id="live" role="status" aria-live="polite"></div><div class="ov" id="ov"></div></div>
+<div class="pn">
+<h3>Simulator: sensors and world events</h3>
+<p>The app logic is real. These controls stand in for the phone’s sensors and the building.</p>
+<button data-a="walk">Walk 10 ft</button><button data-a="auto" id="b-auto">Auto-walk</button>
+<button data-a="obs">Obstacle 3 ft ahead</button><button data-a="clear">Clear obstacle</button>
+<button data-a="close" id="b-close">Close side hallway</button><button data-a="sig" id="b-sig">Drop signal</button>
+<button data-a="fall">Simulate fall</button><button data-a="bump">Simulate hard bump</button>
+<button data-a="sensors" id="b-sens">Use this phone’s motion sensor</button><button data-a="fire">Fire alarm</button><button data-a="haz">Report hazard</button>
+<p style="margin-top:10px">Voice input (used when no microphone is available)</p>
+<input id="say" placeholder="e.g. Accessible bathroom" aria-label="Simulated speech"><button data-a="said">Say</button>
+<button data-a="reset">Reset demo</button>
+<h3 style="margin-top:12px">System log</h3><div id="log" aria-label="System log"></div>
+<p>Assumptions: one building (Schweitzer Hall), simulated indoor positioning and obstacle sensor, no real calls or texts. Fall detection logic runs on real accelerometer data if you enable it. Not a medical device and not HIPAA-covered.</p>
+</div>
+<script>
+const $=s=>document.querySelector(s),G="#f9e04b";
+const N={ENT:[0,0,1,"Entrance"],LOB:[0,-40,1,"Lobby"],R105:[-40,-40,1,"Room 105"],EL1:[60,-40,1,"Elevator"],ST1:[0,-65,1,"Stairs"],EL2:[60,-40,2,"Elevator"],ST2:[0,-65,2,"Stairs"],MH1:[70,-40,2,"Main hall"],MH2:[70,-110,2,"Main hall"],BATH:[30,-110,2,"Accessible Bathroom"],R214:[110,-75,2,"Room 214"]};
+// [from,to,type(w walk,r elevator,s stairs),sideHallway]
+const E=[["ENT","LOB","w"],["LOB","R105","w"],["LOB","EL1","w"],["LOB","ST1","w"],["EL1","EL2","r"],["ST1","ST2","s"],["ST2","EL2","w"],["ST2","BATH","w",1],["EL2","BATH","w",1],["EL2","MH1","w"],["MH1","MH2","w"],["MH2","BATH","w"],["MH1","R214","w"]];
+const PL=[{k:"BATH",n:"Accessible Bathroom",s:"Schweitzer Engineering Hall, floor 2"},{k:"R105",n:"Room 105",s:"Schweitzer Engineering Hall, floor 1"},{k:"R214",n:"Room 214",s:"Schweitzer Engineering Hall, floor 2"},{k:"X",n:"Room 1AA",s:"Holland and Terrell Libraries",x:1},{k:"X",n:"Front Desk @ Rec",s:"Student Recreation Center",x:1},{k:"X",n:"Room G04",s:"The Spark: Academic Innovation Hub",x:1}];
+const RATE=["Slow","Default","Fast"],RV=[.8,1,1.25],FREQ=["Minimal","Balanced","Frequent"],FT=[1e9,50,20],SIZE=["Medium","Large","Largest"],SZ=[1,1.2,1.4];
+const init=()=>({scr:"dest",gate:1,menu:0,dest:null,mode:"comfort",R:{},route:null,nav:null,units:"Feet",rate:1,vol:55,freq:1,size:1,hc:0,stride:0,closed:0,signal:1,cache:{sch:1},cd:10,sent:0,prev:"dest",auto:null,sens:0,delta:0,haz:[],muted:0,hap:0,back:0,fire:0,
+ contacts:[{n:"Scott - Brother",p:"(123) 456-7890",on:1},{n:"John - Father",p:"(123) 456-7890",on:1},{n:"Local Emergency Services",p:"Available in this area",on:1}],ask:1});
+let S=init(),logs=[],tm=null;
+try{const v=JSON.parse(localStorage.getItem("theia")||"{}");Object.assign(S,v)}catch(e){}
+const save=()=>{try{localStorage.setItem("theia",JSON.stringify({units:S.units,rate:S.rate,vol:S.vol,freq:S.freq,size:S.size,hc:S.hc,stride:S.stride,contacts:S.contacts,ask:S.ask}))}catch(e){}};
+const log=m=>{logs.push(new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit",second:"2-digit"})+"  "+m);const l=$("#log");l.innerHTML=logs.slice(-60).join("<br>");l.scrollTop=1e9};
+const fmt=f=>S.units==="Feet"?Math.round(f)+" ft":Math.round(f*.3048)+" m";
+const say=t=>{S.live=t;const hp=S.hap?(/left/i.test(t)?[100,80,100]:/right/i.test(t)?[400]:/obstacle|stop|hazard|fire|fall|help/i.test(t)?[600,100,600,100,600]:[60]):0;$("#live").textContent=(S.hap?"Haptic "+JSON.stringify(hp)+": ":S.muted?"Audio muted: ":"Voice: ")+t;log((S.hap?"Haptic: ":"Speak: ")+t);if(hp){buzz(hp);return}if(S.muted)return;try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.volume=S.vol/100;u.rate=RV[S.rate];speechSynthesis.speak(u)}catch(e){}};
+const buzz=p=>{try{navigator.vibrate&&navigator.vibrate(p)}catch(e){}};
+// ---------- routing engine ----------
+const eft=e=>e[2]==="r"?0:e[2]==="s"?30:Math.round(Math.hypot(N[e[0]][0]-N[e[1]][0],N[e[0]][1]-N[e[1]][1]));
+function path(from,to,mode){const d={},p={},q=new Set(Object.keys(N));q.forEach(k=>d[k]=1e9);d[from]=0;
+ while(q.size){let u=null;q.forEach(k=>{if(u===null||d[k]<d[u])u=k});q.delete(u);if(u===to||d[u]>=1e9)break;
+  E.forEach((e,i)=>{const v=e[0]===u?e[1]:e[1]===u?e[0]:null;if(!v||(e[3]&&S.closed)||(mode==="comfort"&&e[2]==="s")||(mode==="fire"&&e[2]==="r"))return;const c=d[u]+(e[2]==="r"?20:eft(e))+(S.haz.includes(i)?80:0);if(c<d[v]){d[v]=c;p[v]=[u,i]}})}
+ if(d[to]>=1e9)return null;const st=[];let c=to;while(c!==from){const[u,i]=p[c];st.unshift({i,f:u,t:c});c=u}
+ let ph=0;return st.map(s=>{const e=E[s.i];s.ty=e[2];s.ft=eft(e);s.d=0;if(s.ty==="w"){const a=N[s.f],b=N[s.t],h=Math.atan2(b[0]-a[0],-(b[1]-a[1]))*180/Math.PI;s.d=((h-ph+540)%360)-180;ph=h}else ph=0;return s})}
+const text=s=>s.ty==="r"?"Take the elevator to floor "+N[s.t][2]:s.ty==="s"?"Take the stairs "+(N[s.t][2]>N[s.f][2]?"up":"down")+" to floor "+N[s.t][2]:(Math.abs(s.d)<25?"Continue straight":"Turn "+(s.d>0?"right":"left")+(Math.abs(s.d)>110?" sharply":""))+" for "+fmt(s.ft);
+const tot=r=>{const ft=r.reduce((a,s)=>a+s.ft,0),rd=r.some(s=>s.ty==="r"),st=r.some(s=>s.ty==="s");return{ft,r:rd,s:st,m:Math.round(ft/180+r.filter(s=>s.ty==="r").length*.75+r.filter(s=>s.ty==="s").length*.5)||1}};
+const plan=()=>{S.nav=null;S.back=S.back&&0;S.R={comfort:path("ENT",S.dest.node,"comfort"),short:path("ENT",S.dest.node,"short")};S.route=S.R[S.mode]};
+const where=()=>{const s=S.nav&&S.route[S.nav.i];return "Schweitzer Engineering Hall, floor "+(s?N[s.f][2]:1)+(s?", near "+N[s.f][3].toLowerCase():", entrance")};
+// ---------- sensors: fall detection (free-fall then impact) ----------
+let ff=0,fe=0;
+function sample(t,g){let trig=0;if(g<.4){if(!ff)ff=t}else{if(ff&&t-ff>=100)fe=t;ff=0}
+ if(fe&&g>2.5&&t-fe<1000){fe=0;trig=1;log("Fall pattern: free-fall then "+g.toFixed(1)+" g impact");onFall()}
+ if(fe&&t-fe>=1000)fe=0;if(!trig&&!fe&&g>2.5)log("Spike of "+g.toFixed(1)+" g ignored (no free-fall phase)")}
+function feed(a){ff=fe=0;let k=0;const iv=setInterval(()=>{if(k>=a.length)return clearInterval(iv);sample(k*20,a[k++])},20)}
+const walkG=n=>Array.from({length:n},(_,k)=>1+.15*Math.sin(k*.9));
+function onFall(){if(S.scr==="emg")return;stopAuto();S.prev=S.scr;S.scr="emg";S.sent=0;S.cd=10;say("A fall was detected. Calling for help in 10 seconds. Say cancel alert if you are okay.");buzz([300,100,300]);clearInterval(tm);
+ tm=setInterval(()=>{if(S.scr!=="emg"||S.sent)return clearInterval(tm);S.cd--;buzz(80);if(S.cd<=0)send("Fall detected, no response");draw()},1000);startRec();draw()}
+function send(why){clearInterval(tm);S.sent=1;const c=S.contacts.filter(x=>x.on).map(x=>x.n.split(" - ")[0]);log("ALERT (simulated) to "+c.join(", ")+": "+why+". Last known: "+where()+", "+new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}));say("Help has been requested. Stay where you are.");draw()}
+// ---------- speech ----------
+let rec=null;
+function startRec(){try{const R=window.SpeechRecognition||window.webkitSpeechRecognition;if(!R)return log("No speech recognition in this browser: use the voice box on the right");rec=new R();rec.lang="en-US";rec.onresult=e=>heard(e.results[0][0].transcript);rec.start()}catch(e){}}
+function heard(t){log("Heard: “"+t+"”");const l=t.toLowerCase();
+ if(S.scr==="emg"&&/cancel|okay/.test(l))return A.cancel();
+ if(S.scr==="nav"&&/repeat/.test(l))return A.rep();if(S.scr==="nav"&&/hazard/.test(l))return A.haz();if(/mute/.test(l)&&["nav","fire"].includes(S.scr))return A.mute();
+ if(S.scr==="dest"||S.scr==="voice"){S.heard=t;S.cand=/bath|restroom|accessible/.test(l)?"BATH":/105/.test(l)?"R105":null;S.scr="voice";draw()}}
+// ---------- navigation ----------
+const stopAuto=()=>{clearInterval(S.auto);S.auto=null};
+function startNav(){S.nav={i:0,left:S.route[0].ft};S.scr="nav";say(text(S.route[0]));draw()}
+function reroute(){const n=S.nav,cs=S.route[n.i],bad=E[cs.i][3]&&S.closed,rem=n.left+S.route.slice(n.i+1).reduce((a,s)=>a+s.ft,0);
+ const from=bad?cs.f:cs.t,keep=bad?[]:[cs],nw=path(from,S.dest.node,S.mode);
+ if(!nw){S.prev=S.scr;stopAuto();say("No accessible route is available. Stay in place and call for help if needed.");return}
+ S.route=keep.concat(nw);n.i=0;n.left=bad?nw[0].ft:n.left;S.delta=tot(S.route).ft-rem;S.scr="reroute";stopAuto();
+ say("Your route has changed. The side hallway is closed for maintenance. A new accessible route was found."+(bad?" Turn around.":""));log("Reroute: closure on current path, new total "+fmt(tot(S.route).ft));draw()}
+const A={
+ gate(){S.gate=0;draw()},menu(){S.menu=!S.menu;draw()},go(v){S.menu=0;S.scr=v;draw()},
+ mic(){S.scr="voice";S.heard="";S.cand=undefined;say("I’m listening. Say a room, place, or facility type.");startRec();draw()},
+ retry(){S.heard="";S.cand=undefined;startRec();draw()},
+ pick(v,b){const p=PL[+v];if(p.x){say(p.n+" is outside this prototype’s map. Try Room 105 or Accessible Bathroom.");return}S.dest={name:p.n,node:p.k};S.mode="comfort";plan();S.scr="route";draw()},
+ confirm(){S.dest={name:S.cand==="BATH"?"Accessible Bathroom":"Room 105",node:S.cand};S.mode="comfort";plan();S.scr="route";draw()},
+ mode(v){S.mode=v;S.route=S.R[v];draw()},
+ start(){if(!S.route)return;if(S.back)return startNav();S.scr="entr";say("You are at the Schweitzer Engineering Hall. Switching to indoor navigation.");draw()},
+ cont(){startNav()},
+ rep(){const n=S.nav;say(S.scr==="obs"?"Obstacle ahead, 3 feet. Follow the arrow around the obstacle when safe.":S.scr==="reroute"?"Your route has changed. Continue on the new route.":text(S.route[n.i]));},
+ walk(){const n=S.nav;if(!["nav","fire"].includes(S.scr)||!n)return log("Walk ignored: not navigating");const old=n.left,th=FT[S.freq];n.left=Math.max(0,n.left-10);
+  if(n.left>0&&Math.floor(n.left/th)<Math.floor(old/th))say(fmt(n.left)+" remaining");
+  if(n.left<=0){n.i++;if(n.i>=S.route.length){stopAuto();S.scr="arr";S.fire=0;say("You have arrived at "+S.dest.name+".");buzz(400)}else{n.left=S.route[n.i].ft;say(text(S.route[n.i]))}}draw()},
+ auto(){if(S.auto)stopAuto();else S.auto=setInterval(()=>{["nav","fire"].includes(S.scr)?A.walk():stopAuto();draw()},700);draw()},
+ obs(){if(S.scr!=="nav")return log("Obstacle sensor idle: not navigating");stopAuto();S.scr="obs";say("Obstacle ahead, 3 feet. Follow the arrow around the obstacle when safe.");buzz([200,100,200]);log("Floor-level obstacle at 3 ft (simulated depth sensor)");draw()},
+ clear(){if(S.scr==="obs"){S.scr="nav";say("Path clear. "+text(S.route[S.nav.i]));draw()}},
+ close(){S.closed=!S.closed;log("Side hallway "+(S.closed?"closed":"reopened"));if(S.nav&&["nav","obs"].includes(S.scr)&&S.closed)reroute();else if(S.dest&&S.scr==="route"){plan();draw()}else draw()},
+ sig(){S.signal=!S.signal;log("Signal "+(S.signal?"restored":"lost"));if(!S.signal&&S.scr==="nav"){stopAuto();S.scr="sig";say("Please stop. Your location is inaccurate. Stay in place while THEIA reconnects.")}
+  if(S.signal&&S.scr==="sig"){S.scr="nav";say("Location restored. Guidance resumes. "+text(S.route[S.nav.i]))}draw()},
+ help(){send(S.scr==="obs"?"User requested help at obstacle":"User requested help")},
+ send(){send("User requested help")},
+ cancel(){clearInterval(tm);try{rec&&rec.stop()}catch(e){}log("Alert cancelled by user");S.sent=0;S.scr=S.prev==="emg"?"dest":S.prev;say("Alert cancelled.");draw()},
+ ok(){S.sent=0;S.scr=S.prev==="emg"?"dest":S.prev;draw()},
+ fall(){feed([...walkG(40),...Array(15).fill(.15),3.2,...Array(10).fill(1)]);log("Simulated fall: accelerometer stream started")},
+ bump(){feed([...walkG(20),3,...Array(10).fill(1)]);log("Simulated hard bump: accelerometer stream started")},
+ async sensors(){try{if(DeviceMotionEvent.requestPermission&&await DeviceMotionEvent.requestPermission()!=="granted")return log("Motion permission denied");
+  if(S.sens)return;S.sens=1;addEventListener("devicemotion",e=>{const a=e.accelerationIncludingGravity;if(a)sample(performance.now(),Math.hypot(a.x,a.y,a.z)/9.81)});log("Live accelerometer feeding the fall detector");draw()}catch(e){log("No motion sensor available on this device")}},
+ said(){const i=$("#say");if(i.value.trim())heard(i.value.trim());i.value=""},
+ reset(){stopAuto();clearInterval(tm);S=init();S.gate=0;logs=[];draw();log("Demo reset")},
+ cyc(v){const L={rate:3,freq:3,size:3}[v];if(v==="units")S.units=S.units==="Feet"?"Meters":"Feet";else if(v==="hc")S.hc=!S.hc;else S[v]=(S[v]+1)%L;save();draw()},
+ tg(v){S.contacts[v].on=!S.contacts[v].on;draw()},ask(){S.ask=!S.ask;draw()},
+ addc(){S.contacts.push({n:"Contact "+(S.contacts.length-1)+" - Friend",p:"(123) 555-0142",on:1});draw()},
+ savec(){save();log("Contacts saved on this device only");say("Contacts saved.");},
+ dl(){const k=["hol","rec"].find(x=>!S.cache[x]);if(k){S.cache[k]=1;log("Map downloaded (simulated)")}draw()},
+ cal(){const T=.5+Math.random()*.12;let pk=0,last=-1e3;const g=Array.from({length:170},(_,k)=>1+.35*Math.sin(2*Math.PI*k*.02/T));
+  g.forEach((v,k)=>{if(v>1.25&&v>=g[k-1]&&v>g[k+1]&&k*20-last>300){pk++;last=k*20}});S.stride=+(10/pk).toFixed(2);log("Calibration: "+pk+" steps over 10 ft, stride "+S.stride+" ft");save();say("Calibration saved. Your stride is about "+S.stride+" feet.");draw()}
+};
+// ---------- screens ----------
+const arrow=d=>`<svg viewBox="0 0 60 60" width="84" height="84" style="transform:rotate(${d}deg);display:block;margin:0 auto" aria-hidden="true"><path d="M30 54V8M12 26L30 8l18 18" fill="none" stroke="${G}" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+function cur(){const n=S.nav;if(!n)return N[S.route[0].f];const s=S.route[n.i],f=s.ft?1-n.left/s.ft:0,a=N[s.f],b=N[s.t];return[a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f]}
+function map(){const c=cur();let pts=S.route.map(s=>N[s.f].slice(0,2).join(",")).concat(N[S.route[S.route.length-1].t].slice(0,2).join(","));
+ return`<svg viewBox="-55 -125 150 140" style="width:100%;height:118px;background:#1a1b1e;border-radius:10px;border:1px solid #3a3b3f" role="img" aria-label="Route map">`+E.map((e,ix)=>e[2]==="r"?"":`<line x1="${N[e[0]][0]}" y1="${N[e[0]][1]}" x2="${N[e[1]][0]}" y2="${N[e[1]][1]}" stroke="${e[3]&&S.closed?"#c0453f":S.haz.includes(ix)?"#e8912d":"#666"}" stroke-width="3" ${e[3]&&S.closed?'stroke-dasharray="4"':""}/>`).join("")+`<polyline points="${pts.join(" ")}" fill="none" stroke="${G}" stroke-width="2.5"/><circle cx="${c[0]}" cy="${c[1]}" r="5" fill="${G}"/></svg>`}
+const row=(l,v,a,x="")=>`<button class="cd" data-a="${a}" ${x}><b>${l}</b><br><span class="sm">${v}</span></button>`;
+const R={
+dest:()=>`<div class="sm">Where to?</div><h2>Choose your destination</h2><div class="cd" style="display:flex;gap:8px;align-items:center"><input id="q" aria-label="Search places" placeholder="Say or type a place" style="flex:1;background:none;border:0;color:#fff;font:inherit;min-width:0"><button class="ib" data-a="mic" aria-label="Voice input">&#127908;</button></div><div class="sm">Frequent places</div>`+PL.map((p,i)=>`<button class="cd pl" data-a="pick" data-v="${i}"><b>${p.n}</b><br><span class="sm">${p.s}${p.x?" (not in prototype)":""}</span></button>`).join(""),
+voice:()=>`<div class="sm">Voice destination</div><h2>${S.heard?"I heard":"I’m listening"}</h2>`+(S.heard?`<div class="cd"><b>“${S.heard}”</b><br><span class="sm">${S.cand?(S.cand==="BATH"?"Accessible Bathroom":"Room 105")+", Schweitzer Engineering Hall":"No matching place. Try Room 105 or Accessible Bathroom."}</span></div>`:`<div class="sm ctr" style="padding:40px 0">&#9646;&#9646;&#9646;&#9646;&#9646;<br>Say a room, place, or facility type</div>`)+(S.cand?`<button class="btn" data-a="confirm">Confirm Location</button>`:"")+`<button class="b2 cd" data-a="retry">Try again</button><button class="b2 cd" data-a="go" data-v="dest">Back to frequent places</button>`,
+route:()=>{if(!S.R.comfort)return`<h2>No route found</h2><p class="sm">The side hallway is closed and no accessible alternative exists.</p>`;const c=(m,l,x)=>{const t=tot(x);return`<button class="cd ${S.mode===m?"sel":""}" data-a="mode" data-v="${m}"><b>${l}</b>${m==="comfort"?' <span class="sm" style="float:right">Stair-free</span>':""}<br><span class="sm">${t.m} min · ${fmt(t.ft)} · ${t.s?"stairs":t.r?"elevator":"level"}</span></button>`};
+ return`<div class="sm">Route options</div><h2>To ${S.dest.name}</h2>${map()}${c("comfort","Comfortable",S.R.comfort)}${c("short","Shortest",S.R.short)}<div class="cd sm">Routes avoid known closures${S.haz.length?" and "+S.haz.length+" reported hazard(s)":""}</div><button class="btn" data-a="start">Start ${S.mode==="comfort"?"comfortable":"shortest"} route</button>`},
+entr:()=>`<div class="ctr" style="padding:50px 0 10px;font-size:3em">&#128682;</div><div class="sm ctr">Arrived at entrance</div><h2 class="ctr">You are at the Schweitzer Engineering Hall.</h2><p class="sm ctr">Switching to indoor navigation.</p><div class="cd"><b>Next</b> <span class="sm" style="float:right">Indoor route</span><br><span class="sm">${text(S.route[0])}</span></div><button class="btn" data-a="cont">Continue</button>`,
+nav:()=>{const n=S.nav,s=S.route[n.i],x=S.route[n.i+1];return`${arrow(s.d)}<div class="big">${s.ty==="w"||s.ty==="s"?fmt(n.left):"Elevator"}</div><div class="sm ctr">${text(s)}${S.stride&&n.left&&s.ty==="w"?" · about "+Math.round(n.left/S.stride)+" steps":""}</div>${map()}<div class="cd"><b>Next</b><br><span class="sm">${x?text(x):"Arrive at "+S.dest.name}</span></div><button class="btn" data-a="rep">Repeat Instruction</button>`},
+obs:()=>`${arrow(-40)}<div class="big">3 ft</div><div class="cd" style="border-color:#8c2f2b;background:#2a1716"><b>Obstacle Ahead</b><br><span class="sm">Floor-level obstacle detected ahead. Follow the arrow around the obstacle when safe.</span></div><div class="cd"><b>Obstacle detection</b><br><span class="sm">THEIA detects floor-level obstacles only. Overhead hazards are not detected.</span></div><button class="b2 cd gn" data-a="help">Call For Help</button><button class="btn" data-a="rep">Repeat Warning</button>`,
+reroute:()=>`<div class="sm">Pathway closure</div><h2>Your route has changed</h2><p class="sm">The side hallway is closed for maintenance. THEIA found a new accessible route.</p><div class="cd"><b>New Route</b> <span style="float:right;color:${G}" class="sm">Open</span><br><span class="sm">${S.delta>0?"Adds "+fmt(S.delta):"No extra distance"} · ${tot(S.route).r?"elevator accessible":"level"}</span></div>${map()}<button class="btn" data-a="cont2">Continue on new route</button><button class="b2 cd" data-a="rep">Repeat Change</button>`,
+sig:()=>`<div class="ctr" style="padding:30px 0 0;font-size:3em">&#128246;</div><h2 class="ctr">Please STOP</h2><p class="sm ctr">Your location is inaccurate. Stay in place while THEIA reconnects.</p><div class="cd"><b>Finding your location</b> <span class="spin" style="float:right"></span><br><span class="sm">Listening for nearby connection</span></div><div class="cd sm ctr">Guidance will resume when THEIA establishes secure connection.</div><button class="b2 cd" data-a="help">Call for help</button>`,
+emg:()=>{const c=S.contacts.filter(x=>x.on).map(x=>x.n.split(" - ")[0]).join(", ");return`<div class="ring">${S.sent?"&#10003;":S.cd}</div><h2 class="ctr">${S.sent?"Help requested":"Calling for Help"}</h2><p class="sm ctr">${S.sent?"Alert sent (simulated) to "+c+". Stay where you are.":"A fall has been detected. Please cancel if you are safe, and do not need medical assistance."}</p><div class="cd"><b>Alert from:</b><br><span class="sm">Last known location: ${where()}</span></div>`+(S.sent?`<button class="b2 cd gn" data-a="ok">I am okay</button>`:`<button class="b2 cd gn" data-a="cancel">I am okay – Cancel Alert</button><button class="btn rd" style="color:#fff" data-a="send">Call for help now</button><div class="sm ctr">Voice: “Cancel alert” · Haptic countdown</div>`)},
+arr:()=>`<div class="ctr" style="padding:50px 0 0;font-size:3em">&#10003;</div><h2 class="ctr">You have arrived</h2><p class="sm ctr">${S.dest.name}</p><button class="btn" data-a="go" data-v="dest">Done</button>`,
+pref:()=>`<div class="sm">Settings</div><h2>Customize THEIA to you</h2><div class="cd">Voice Volume: <b>${S.vol}%</b><input type="range" min="0" max="100" value="${S.vol}" data-i="vol" aria-label="Voice volume" style="width:100%;accent-color:${G}"></div>`+row("Speech rate",RATE[S.rate],"cyc",'data-v="rate"')+row("Instruction Frequency",FREQ[S.freq],"cyc",'data-v="freq"')+row("Text Size",SIZE[S.size],"cyc",'data-v="size"')+row("Screen Contrast",S.hc?"High Contrast":"Default","cyc",'data-v="hc"')+row("Distance Units",S.units,"cyc",'data-v="units"'),
+contacts:()=>`<div class="sm">Safety profile</div><h2>Emergency Contacts</h2><div class="sm">Select who you would like to alert in emergency situations</div>`+S.contacts.map((c,i)=>`<button class="cd" data-a="tg" data-v="${i}" aria-pressed="${!!c.on}"><b>${c.n}</b> <span style="float:right;color:#7bd48a">${c.on?"&#10003;":""}</span><br><span class="sm">${c.p}</span></button>`).join("")+`<button class="cd" data-a="addc"><b>Add a Contact</b></button><button class="cd" data-a="ask"><b>Caretaker Changes</b> <span style="float:right">${S.ask?"On":"Off"}</span><br><span class="sm">Ask before saving</span></button><button class="btn" data-a="savec">Save Contacts</button><div class="sm">Privacy: contacts stay on this device. This prototype is not a HIPAA-covered service and sends no real alerts.</div>`,
+off:()=>{const m=[["sch","Schweitzer Engineering Hall","Floors G-3 · 75 MB"],["hol","Holland and Terrell Libraries","Floors B-4"],["rec","Student Recreation Center","Floors 1-2"]];return`<div class="sm">Offline maps</div><h2>Ready without internet</h2>`+m.map(x=>`<div class="cd"><b>${x[1]}</b> <span style="float:right;color:#7bd48a">${S.cache[x[0]]?"&#10003;":""}</span><br><span class="sm">${x[2]} · ${S.cache[x[0]]?"Updated today":"Not downloaded"}</span></div>`).join("")+`<div class="cd"><b>Offline limitation</b><br><span class="sm">Temporary closures and hazards may be out of date without a connection.</span></div><button class="btn" data-a="dl">Download Map</button>`},
+cal:()=>`<div class="sm">Optional calibration</div><h2>Personalize your distance cues</h2><p class="sm">THEIA always gives distance in feet or meters. Calibration can add an estimate based on your usual pace.</p><div class="cd">Start to finish: <b style="color:${G}">10 ft / 3 m</b></div>${["Choose a familiar, clear path. Mark the distance.","Walk at your regular pace while THEIA calibrates to your steps.","Review and save your estimate."].map((t,i)=>`<div style="display:flex;gap:10px;align-items:center"><span style="background:${G};color:#111;border-radius:50%;width:26px;height:26px;display:grid;place-items:center;font-weight:700">${i+1}</span><span class="sm">${t}</span></div>`).join("")}${S.stride?`<div class="cd"><b>Your stride: about ${S.stride} ft</b><br><span class="sm">Distance cues now include steps.</span></div>`:""}<div class="cd" style="border-color:#8c2f2b"><span class="sm"><b>Safety first.</b> Only start calibration in known locations.</span></div><button class="btn" data-a="cal">${S.stride?"Recalibrate":"Start Calibration"}</button><button class="b2 cd" data-a="go" data-v="dest">Skip for now</button>`
+};
+A.cont2=()=>{S.scr="nav";say(text(S.route[S.nav.i]));draw()};
+Object.assign(A,{haz(){if(S.scr!=='nav')return log('Hazard report needs an active route');stopAuto();S.scr='haz';say('Temporary hazard report. Confirm the pin at your current location?');draw()},pin(){S.haz.push(S.route[S.nav.i].i);log('Hazard pinned near '+where()+'. Future routes avoid it.');S.scr='nav';say('Hazard pinned. Future routes will avoid it.');draw()},unpin(){S.scr='nav';draw()},mute(){S.muted=!S.muted;try{S.muted&&speechSynthesis.cancel()}catch(e){}log('Audio '+(S.muted?'muted':'resumed'));if(!S.muted)say('Audio resumed.');draw()},hap(){S.hap=!S.hap;log('Haptic mode '+(S.hap?'on':'off'));say(S.hap?'Haptic mode on':'Haptic mode off');draw()},preview(){[['Left',[100,80,100]],['Right',[400]],['Stop or hazard',[600,100,600,100,600]]].forEach((p,i)=>setTimeout(()=>{buzz(p[1]);log('Preview haptic: '+p[0]);$('#live').textContent='Haptic '+JSON.stringify(p[1])+': '+p[0]},i*1500))},nextgo(){S.dest={name:'Room 214',node:'R214'};S.mode='comfort';S.back=0;plan();A.start()},back(){const f=S.dest.node;S.dest={name:'Start point (Entrance)',node:'ENT'};S.mode='comfort';S.R={comfort:path(f,'ENT','comfort'),short:path(f,'ENT','short')};S.route=S.R.comfort;S.back=1;S.nav=null;S.scr='route';draw()},
+fire(){const n=S.nav;if(!n||!['nav','obs','sig','reroute'].includes(S.scr)){say('Fire alarm. Leave the building by the nearest exit.');return log('Fire alarm outside active navigation')}stopAuto();const cs=S.route[n.i],rd=cs.ty==='r',from=rd?cs.f:cs.t,keep=rd?[]:[cs],nw=path(from,'ENT','fire')||[];S.route=keep.concat(nw);n.i=0;if(!keep.length)n.left=S.route.length?S.route[0].ft:0;S.dest={name:'Building exit',node:'ENT'};S.back=0;if(!S.route.length){S.scr='arr';say('You are at the exit.');return draw()}S.fire=1;S.scr='fire';say('Fire alarm detected. Rerouting to exit. Follow the detour to the exit route. Elevators are not used.');buzz([500,150,500,150,500]);log('FIRE ALARM: elevator-free exit route, '+fmt(tot(S.route).ft));draw()}});
+Object.assign(R,{fire:()=>{const n=S.nav,s=S.route[n.i];return`<div class='cd ctr' style='background:#111;font-weight:700'>EMERGENCY ROUTE ACTIVE</div><div class='ctr' style='font-size:2.4em'>&#9888;</div><h2 class='ctr'>FIRE ALARM DETECTED</h2><div class='ctr' style='color:${G};font-weight:700'>REROUTING TO EXIT</div>${arrow(s.d)}<div class='big'>${fmt(n.left)}</div><div class='cd ctr sm'>${text(s)}</div><div class='cd' style='background:#111'>Keep moving calmly toward the marked exit. Elevators are not used in a fire.</div><button class='btn' data-a='rep'>Repeat Instruction</button>`},haz:()=>`<div class='ctr' style='padding-top:20px;font-size:3em'>&#128205;</div><div class='sm ctr'>Voice report</div><h2 class='ctr'>Temporary Hazard Reported</h2><p class='sm ctr'>You said: “Report a hazard here.”</p><p class='ctr'>Confirm the pin at your current location?<br><span class='sm'>${where()}</span></p><button class='btn' data-a='pin'>Confirm Pin</button><button class='b2 cd' data-a='unpin'>Cancel</button>`,nextc:()=>{const t=tot(path('ENT','R214','comfort'));return`<div class='cd'><div class='sm'>Next class</div><h2>Room 214</h2><div style='display:flex;justify-content:space-between;align-items:center'><span class='sm'>Starts soon</span><span class='pill'>5 MIN</span></div><p class='sm'>Your accessible route is ready.</p></div><div class='cd' style='border-left:4px solid ${G}'><div class='sm'>Route</div><b>Room 214 · Engineering</b><br><span class='sm'>About ${t.m} minutes · Indoor${S.haz.length?' · avoiding '+S.haz.length+' reported hazard(s)':''}</span></div><div class='sm ctr'>Tap to begin turn-by-turn guidance.</div><button class='btn' style='padding:44px 14px;font-size:1.3em' data-a='nextgo'>Start Navigation</button>`},hapt:()=>`<div class='sm'>Accessibility</div><h2>Haptic settings</h2><div class='cd'><b>Deafblind Haptic Mode</b> <button class='pill' data-a='hap' role='switch' aria-checked='${!!S.hap}' style='float:right;background:none;color:${S.hap?G:'#fff'}'>${S.hap?'ON':'OFF'}</button><p class='sm'>Spoken audio is off. THEIA communicates directions and alerts through directional vibrations.</p><div class='sm'>Left: two short · Right: one long · Stop or hazard: three long</div></div><button class='cd' data-a='preview'><b>Preview vibration pattern</b><br><span class='sm'>Plays Left, Right, then Stop</span></button><div class='sm ctr'>You can change this setting at any time. Phones without a vibration motor (such as iPhone Safari) show each pattern on screen.</div>`,arr:()=>`<div class='cd ctr' style='color:#7bd48a;border-color:#3a8f4a'>ARRIVED</div><div class='ctr' style='font-size:3em'>&#128205;</div><h2 class='ctr'>You have arrived at your destination</h2><div class='cd'><div class='sm'>Destination</div><b>${S.dest.name}</b><br><span class='sm'>Navigation ended safely.</span></div>${S.dest.node==='ENT'?'':`<div class='sm ctr'>Begin a guided trip back to your start point.</div><button class='btn' data-a='back'>Return to Start</button>`}<button class='b2 cd' data-a='go' data-v='dest'>Done</button>`});
+const d0=R.dest,n0=R.nav;R.dest=()=>d0().replace('<div class="sm">Frequent places</div>',`<button class='cd' data-a='go' data-v='nextc' style='border-color:${G}'><b>Next class: Room 214</b> <span class='pill' style='float:right'>5 MIN</span><br><span class='sm'>Quick start with your accessible route</span></button><div class="sm">Frequent places</div>`);R.nav=()=>(S.muted?`<div class='cd ctr' style='border-color:${G}'><b>AUDIO MUTED</b></div>`:'')+n0().replace('<button class="btn" data-a="rep">',`<button class='b2 cd' data-a='mute'>Two-finger tap (or press) to ${S.muted?'resume':'mute'} audio</button><button class="btn" data-a="rep">`);
+$('#sc').addEventListener('touchstart',e=>{if(e.touches.length===2&&['nav','fire'].includes(S.scr)){e.preventDefault();A.mute()}},{passive:false});
+const PILL={entr:"Route active",obs:"Route paused",reroute:"Route updated",sig:"Location lost",fire:"Emergency route active",haz:"Route active",arr:"Route complete",nextc:"Next up",hapt:"Accessibility"};
+function draw(){const ph=$("#ph");ph.style.setProperty("--sz",SZ[S.size]);ph.classList.toggle("hc",!!S.hc);ph.classList.toggle("fr",S.scr==="fire");
+ const p=S.scr==="nav"?"Indoors · Floor "+N[S.route[S.nav.i].f][2]:S.scr==="emg"?(S.sent?"Help requested":"Fall detected"):PILL[S.scr]||"";
+ $("#hd").innerHTML=`<b class="br">THEIA</b>${p?`<span class="pill">${p}</span>`:""}<button class="ib" data-a="menu" aria-label="Menu">&#9776;</button>`;
+ $("#sc").innerHTML=(R[S.scr]||(()=>R.dest()))();
+ $("#ov").innerHTML=S.gate?`<h2>Before you start</h2><p>THEIA is a student prototype for indoor navigation. It is not a medical device and is not covered by HIPAA. Location, fall alerts, and contacts stay on this device, and no real calls or texts are sent.</p><p>Safety: always use your cane or guide dog. THEIA detects floor-level obstacles only.</p><button class="btn" data-a="gate">I understand</button>`:S.menu?`<h2>Menu</h2>`+[["dest","Destination"],["nextc","Next class"],["hapt","Haptic mode"],["pref","Preferences"],["contacts","Emergency contacts"],["off","Offline maps"],["cal","Step calibration"]].map(x=>`<button class="b2 cd" data-a="go" data-v="${x[0]}">${x[1]}</button>`).join("")+`<button class="b2 cd" data-a="menu">Close</button>`:"";
+ $("#b-auto").classList.toggle("on",!!S.auto);$("#b-close").classList.toggle("on",!!S.closed);$("#b-close").textContent=S.closed?"Reopen side hallway":"Close side hallway";$("#b-sig").classList.toggle("on",!S.signal);$("#b-sig").textContent=S.signal?"Drop signal":"Restore signal";$("#b-sens").classList.toggle("on",!!S.sens)}
+document.addEventListener("click",e=>{const b=e.target.closest("[data-a]");if(b&&A[b.dataset.a])A[b.dataset.a](b.dataset.v,b)});
+document.addEventListener("input",e=>{const t=e.target;if(t.dataset.i==="vol"){S.vol=+t.value;t.previousSibling.nodeType===3&&0;const bb=t.parentNode.querySelector("b");if(bb)bb.textContent=S.vol+"%";save()}
+ if(t.id==="q"){const v=t.value.toLowerCase();document.querySelectorAll(".pl").forEach(r=>r.style.display=r.textContent.toLowerCase().includes(v)?"":"none")}});
+document.addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.id==="say")A.said()});
+draw();log("THEIA prototype ready. Start: Choose a destination.");
+</script></body></html>
