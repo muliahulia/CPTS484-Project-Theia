@@ -100,14 +100,87 @@ export function renderLiveBanner(state, liveEl, force = false) {
   `;
 }
 
+let audioCtx = null;
+
+export function playEarcon(type, state) {
+  if (state?.audioChimes === false || state?.deafblindMode || state?.inQuietZone || state?.muted) return;
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    if (!audioCtx) audioCtx = new Ctx();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+
+    const vol = Math.max(0.03, Math.min(0.22, ((state?.volume ?? 55) / 100) * 0.2));
+    const patterns = {
+      turn: [
+        [523.25, 0, 0.08],
+        [659.25, 0.09, 0.09]
+      ],
+      alert: [
+        [349.23, 0, 0.11],
+        [349.23, 0.14, 0.12]
+      ],
+      arrived: [
+        [523.25, 0, 0.08],
+        [659.25, 0.09, 0.08],
+        [783.99, 0.18, 0.14]
+      ],
+      confirm: [[587.33, 0, 0.05]]
+    };
+    const notes = patterns[type] || patterns.confirm;
+    const now = audioCtx.currentTime;
+
+    notes.forEach(([freq, offset, dur]) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = type === "alert" ? "triangle" : "sine";
+      osc.frequency.setValueAtTime(freq, now + offset);
+      gain.gain.setValueAtTime(0.001, now + offset);
+      gain.gain.exponentialRampToValueAtTime(vol, now + offset + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + offset + dur);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now + offset);
+      osc.stop(now + offset + dur + 0.02);
+    });
+  } catch (e) {}
+}
+
 let speakTimer = null;
+let speechDonePromise = Promise.resolve();
+let resolveSpeechDone = null;
+let speechFallbackTimer = null;
+
+function finishSpeechTracking() {
+  clearTimeout(speechFallbackTimer);
+  speechFallbackTimer = null;
+  if (resolveSpeechDone) {
+    const res = resolveSpeechDone;
+    resolveSpeechDone = null;
+    res();
+  }
+}
 
 export function stopSpeech() {
   clearTimeout(speakTimer);
   speakTimer = null;
+  finishSpeechTracking();
   try {
     speechSynthesis.cancel();
   } catch (e) {}
+}
+
+export function waitForSpeech(maxWaitMs = 6500) {
+  return Promise.race([
+    speechDonePromise,
+    new Promise((resolve) => setTimeout(resolve, maxWaitMs))
+  ]);
+}
+
+function toSpokenPhrase(text) {
+  return text
+    .replace(/\b(\d+(?:\.\d+)?)\s*m\b/g, (_, n) => `${n} ${Number(n) === 1 ? "meter" : "meters"}`)
+    .replace(/\b(\d+(?:\.\d+)?)\s*ft\b/g, (_, n) => `${n} ${Number(n) === 1 ? "foot" : "feet"}`);
 }
 
 export function announceOutput(text, state, logFn, liveEl) {
@@ -125,17 +198,30 @@ export function announceOutput(text, state, logFn, liveEl) {
   }
   if (state.muted) return;
 
+  const spokenText = toSpokenPhrase(text);
   const volume = Math.max(0, Math.min(1, state.volume / 100));
   const rate = SPEECH_RATE_VALUES[Number(state.speechRate)] ?? 1.0;
 
+  if (volume > 0 && typeof SpeechSynthesisUtterance !== "undefined") {
+    speechDonePromise = new Promise((resolve) => {
+      resolveSpeechDone = resolve;
+    });
+    const estMs = Math.max(1600, Math.min(8000, Math.round((spokenText.split(/\s+/).length * 420) / rate)));
+    speechFallbackTimer = setTimeout(finishSpeechTracking, estMs);
+  }
+
   speakTimer = setTimeout(() => {
     try {
-      const utterance = new SpeechSynthesisUtterance(text);
+      const utterance = new SpeechSynthesisUtterance(spokenText);
       utterance.volume = volume;
       utterance.rate = rate;
+      utterance.onend = finishSpeechTracking;
+      utterance.onerror = finishSpeechTracking;
       if (speechSynthesis.paused) speechSynthesis.resume();
       speechSynthesis.speak(utterance);
-    } catch (e) {}
+    } catch (e) {
+      finishSpeechTracking();
+    }
   }, 25);
 }
 

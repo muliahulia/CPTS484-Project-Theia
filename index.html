@@ -39,6 +39,7 @@
           <button data-action="triggerObstacle" id="btnObstacle">Obstacle 3 ft ahead</button>
           <button data-action="clearObstacle" id="btnClearObstacle">Clear obstacle</button>
           <button data-action="reportHazard" id="btnHazard">Report hazard (PF-16)</button>
+          <button data-action="clearHazards" id="btnClearHazards">Clear hazards (0)</button>
         </div>
 
         <div class="sim-group">
@@ -55,6 +56,14 @@
           <button data-action="simulateFall" id="btnFall">Simulate fall</button>
           <button data-action="simulateBump" id="btnBump">Simulate hard bump</button>
           <button data-action="enableSensors" id="btnSensors">Use device accelerometer</button>
+        </div>
+
+        <div class="sim-group">
+          <span class="sim-label">Automated Walkthrough Scenarios</span>
+          <button data-action="runScenario" data-val="closure" id="btnScenClosure">1. Closure Reroute</button>
+          <button data-action="runScenario" data-val="obstacle" id="btnScenObstacle">2. Obstacle &amp; Hazard</button>
+          <button data-action="runScenario" data-val="crisis" id="btnScenCrisis">3. Multi-Event Crisis</button>
+          <button data-action="stopScenario" id="btnStopScenario">Stop</button>
         </div>
 
         <div class="sim-group" style="border-bottom:0;margin-bottom:0;padding-bottom:0">

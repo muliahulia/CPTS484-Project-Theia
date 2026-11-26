@@ -86,11 +86,11 @@ export function calculatePath(fromNode, toNode, mode, env) {
 
 export function formatStepInstruction(step, units) {
   if (step.type === "elevator") {
-    return `Take the elevator to floor ${MAP_NODES[step.to][2]}`;
+    return `Take the elevator to floor ${MAP_NODES[step.to][2]}, exiting near ${MAP_NODES[step.to][3]}`;
   }
   if (step.type === "stairs") {
     const dir = MAP_NODES[step.to][2] > MAP_NODES[step.from][2] ? "up" : "down";
-    return `Take the stairs ${dir} to floor ${MAP_NODES[step.to][2]}`;
+    return `Take the stairs ${dir} to floor ${MAP_NODES[step.to][2]} toward ${MAP_NODES[step.to][3]}`;
   }
   const distStr = formatDistance(step.feet, units);
   if (Math.abs(step.turnAngle) < 25) {
@@ -98,10 +98,35 @@ export function formatStepInstruction(step, units) {
   }
   const side = step.turnAngle > 0 ? "right" : "left";
   const sharp = Math.abs(step.turnAngle) > 110 ? " sharply" : "";
-  return `Turn ${side}${sharp} for ${distStr}`;
+  return `Turn ${side}${sharp}, then walk straight for ${distStr}`;
 }
 
-export function shortDirectionLabel(step) {
+export function formatUpcomingTurn(nextStep, feetUntilTurn, units, destName = "destination") {
+  if (!nextStep) return `Arrive at ${destName}`;
+  const inDist = feetUntilTurn > 0 ? ` in ${formatDistance(feetUntilTurn, units)}` : "";
+  if (nextStep.type === "elevator") {
+    return `Take elevator to floor ${MAP_NODES[nextStep.to][2]}${inDist}`;
+  }
+  if (nextStep.type === "stairs") {
+    const dir = MAP_NODES[nextStep.to][2] > MAP_NODES[nextStep.from][2] ? "up" : "down";
+    return `Take stairs ${dir} to floor ${MAP_NODES[nextStep.to][2]}${inDist}`;
+  }
+  if (Math.abs(nextStep.turnAngle) < 25) {
+    return `Continue straight${inDist}`;
+  }
+  const side = nextStep.turnAngle > 0 ? "right" : "left";
+  const sharp = Math.abs(nextStep.turnAngle) > 110 ? " sharply" : "";
+  return `Turn ${side}${sharp}${inDist}`;
+}
+
+export function formatResumeInstruction(step, feetLeft, units) {
+  if (step.type === "walk" && feetLeft < step.feet) {
+    return `Continue straight for ${formatDistance(feetLeft, units)}`;
+  }
+  return formatStepInstruction(step, units);
+}
+
+export function shortDirectionLabel(step, feetLeft = step.feet) {
   if (step.type === "elevator") {
     return `ELEVATOR TO FLOOR ${MAP_NODES[step.to][2]}`;
   }
@@ -109,7 +134,7 @@ export function shortDirectionLabel(step) {
     const dir = MAP_NODES[step.to][2] > MAP_NODES[step.from][2] ? "UP" : "DOWN";
     return `STAIRS ${dir} TO FLOOR ${MAP_NODES[step.to][2]}`;
   }
-  if (Math.abs(step.turnAngle) < 25) return "CONTINUE STRAIGHT";
+  if (feetLeft < step.feet || Math.abs(step.turnAngle) < 25) return "CONTINUE STRAIGHT";
   const side = step.turnAngle > 0 ? "RIGHT" : "LEFT";
   return Math.abs(step.turnAngle) > 110 ? `SHARP ${side}` : `TURN ${side}`;
 }

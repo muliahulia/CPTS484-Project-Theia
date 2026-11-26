@@ -9,6 +9,7 @@ import {
 import {
   formatDistance,
   formatStepInstruction,
+  formatUpcomingTurn,
   shortDirectionLabel,
   summarizeRoute,
   calculatePath
@@ -135,6 +136,22 @@ function renderFloorMapSvg(state, showObstacleMarker = false) {
            <span class="map-floor-label">Floor ${displayedFloor} <span class="tag-badge">You</span></span>
          </div>`;
 
+  const hazardMarkers = state.reportedHazards
+    .map((idx) => {
+      const edge = MAP_EDGES[idx];
+      if (!edge) return "";
+      const f1 = MAP_NODES[edge.from][2];
+      const f2 = MAP_NODES[edge.to][2];
+      if (f1 !== displayedFloor || f2 !== displayedFloor) return "";
+      const mx = (MAP_NODES[edge.from][0] + MAP_NODES[edge.to][0]) / 2;
+      const my = (MAP_NODES[edge.from][1] + MAP_NODES[edge.to][1]) / 2;
+      return `<g transform="translate(${mx},${my})">
+        <circle cx="0" cy="0" r="6.5" fill="#0e7490" stroke="#38bdf8" stroke-width="1.2"/>
+        <text x="0" y="3" text-anchor="middle" font-size="8.5" font-weight="800" fill="#ffffff">!</text>
+      </g>`;
+    })
+    .join("");
+
   return `<div class="map-card">
     ${floorHeader}
     <svg viewBox="-55 -125 180 140" class="map-svg" role="img" aria-label="Indoor floor ${displayedFloor} map">
@@ -143,27 +160,36 @@ function renderFloorMapSvg(state, showObstacleMarker = false) {
       ${MAP_NODES[startNode][2] === displayedFloor ? `<circle cx="${startCoord[0]}" cy="${startCoord[1]}" r="3.5" fill="#71717a"/>` : ""}
       ${MAP_NODES[endNode][2] === displayedFloor ? `<circle cx="${endCoord[0]}" cy="${endCoord[1]}" r="5" fill="#4ade80" stroke="#0b0b0e" stroke-width="1.2"/>` : ""}
       ${transitionMarkers}
+      ${hazardMarkers}
       ${userMarker}
     </svg>
   </div>`;
 }
 
-function renderSelectCard(label, subtitle, key, options, selectedVal) {
+function renderSelectCard(label, subtitle, key, options, selectedVal, openPrefMenu) {
+  const isOpen = openPrefMenu === key;
+  const displayLabel = typeof selectedVal === "string" ? selectedVal : options[selectedVal] || options[0];
   const opts = options
     .map((opt, idx) => {
       const val = typeof selectedVal === "string" ? opt : idx;
       const isSelected = val === selectedVal;
-      return `<option value="${val}" ${isSelected ? "selected" : ""}>${opt}</option>`;
+      return `<button type="button" class="select-option ${isSelected ? "selected" : ""}" role="option" aria-selected="${isSelected}" data-action="choosePref" data-pref-key="${key}" data-val="${val}">
+        <span>${opt}</span>
+        ${isSelected ? ic("check", "font-size:1.1em") : ""}
+      </button>`;
     })
     .join("");
-  return `<div class="setting-card">
+  return `<div class="setting-card ${isOpen ? "menu-open" : ""}">
     <div class="card-content">
       <div class="card-title">${label}</div>
       <div class="subtext">${subtitle}</div>
     </div>
     <div class="select-wrap">
-      <select class="pref-select" data-pref="${key}" aria-label="${label}">${opts}</select>
-      ${ic("expand_more", "font-size:1.25em")}
+      <button type="button" class="pref-select" data-action="togglePrefMenu" data-val="${key}" role="combobox" aria-expanded="${isOpen}" aria-haspopup="listbox" aria-label="${label}">
+        <span>${displayLabel}</span>
+        ${ic("expand_more", `font-size:1.25em;transition:transform 0.15s ease;transform:rotate(${isOpen ? 180 : 0}deg)`)}
+      </button>
+      ${isOpen ? `<div class="select-drawer" role="listbox" aria-label="${label}">${opts}</div>` : ""}
     </div>
   </div>`;
 }
@@ -239,9 +265,14 @@ export function renderScreen(state, locationLabel, animate = true) {
                <div class="subtext">${
                  state.voiceCandidate
                    ? `${PLACES.find((p) => p.node === state.voiceCandidate)?.name} · Schweitzer Engineering Hall`
-                   : "No matching room found. Try one of the quick options below."
+                   : state.voiceExternalMatch || "No matching room found. Try one of the quick options below."
                }</div>
              </div>`
+          : ""
+      }
+      ${
+        state.voiceMicStatus
+          ? `<div class="notice-banner neutral">${ic("mic_off", "color:#a1a1aa")}<div>${state.voiceMicStatus}</div></div>`
           : ""
       }
       ${
@@ -295,8 +326,41 @@ export function renderScreen(state, locationLabel, animate = true) {
         }
         <div class="notice-banner neutral" role="note">
           ${ic("info", "color:#38bdf8")}
-          <div>Routes avoid known closures${state.highCrowd ? ", congested corridors" : ""}${state.reportedHazards.length ? `, and ${state.reportedHazards.length} reported hazard(s)` : ""}.</div>
+          <div style="flex:1">
+            <div>Routes avoid known closures${state.highCrowd ? ", congested corridors" : ""}${state.reportedHazards.length ? `, and ${state.reportedHazards.length} reported hazard(s)` : ""}.</div>
+            ${
+              state.reportedHazards.length
+                ? `<div class="subtext" style="margin-top:4px;font-size:0.92em">Pinned: ${state.reportedHazards
+                    .map((idx) => {
+                      const e = MAP_EDGES[idx];
+                      return e ? `${MAP_NODES[e.from][3]} ↔ ${MAP_NODES[e.to][3]}` : "";
+                    })
+                    .filter(Boolean)
+                    .join("; ")}</div>
+                   <button class="mini-btn" style="margin-top:6px" data-action="clearHazards">${ic("layers_clear", "font-size:1.1em")} Clear hazard pins</button>`
+                : ""
+            }
+          </div>
         </div>
+        <details class="secondary-section">
+          <summary>
+            <span>Preview turns (${state.route.length} steps)</span>
+            ${ic("expand_more", "font-size:1.4em")}
+          </summary>
+          <div class="secondary-list">
+            ${state.route
+              .map(
+                (s, i) => `<div class="turn-preview-item">
+                  <span class="step-num" style="width:24px;height:24px;font-size:0.78em">${i + 1}</span>
+                  <div style="min-width:0">
+                    <div style="font-weight:600;font-size:0.9em">${formatStepInstruction(s, state.units)}</div>
+                    <div class="subtext" style="font-size:0.78em">Floor ${MAP_NODES[s.to][2]} · ${MAP_NODES[s.to][3]}</div>
+                  </div>
+                </div>`
+              )
+              .join("")}
+          </div>
+        </details>
         <button class="btn-primary" data-action="startRoute">
           ${ic("navigation")} ${activeStats.hasBadgeDoor ? "Acknowledge & Start" : `Start ${state.routeMode} route`}
         </button>
@@ -322,36 +386,52 @@ export function renderScreen(state, locationLabel, animate = true) {
       const nav = state.nav;
       const step = state.route[nav.stepIndex];
       const nextStep = state.route[nav.stepIndex + 1];
+      const displayAngle = step.type === "walk" && nav.feetLeft < step.feet ? 0 : step.turnAngle;
       return `
         ${state.muted ? `<div class="notice-banner warning" style="padding:9px 12px">${ic("volume_off", "color:#fb923c")}<b>Audio Muted</b></div>` : ""}
         ${state.inQuietZone ? `<div class="notice-banner" style="padding:9px 12px">${ic("do_not_disturb_on", "color:#38bdf8")}<b>Quiet Zone · Haptic Cues Only</b></div>` : ""}
-        ${renderArrowSvg(step.turnAngle)}
+        ${renderArrowSvg(displayAngle)}
         <div class="hero-metric" data-nav-metric>${step.type !== "elevator" ? formatDistance(nav.feetLeft, state.units) : "Elevator"}</div>
-        <div class="nav-direction-label">${shortDirectionLabel(step)}</div>
+        <div class="nav-direction-label">${shortDirectionLabel(step, nav.feetLeft)}</div>
         ${state.strideFeet && nav.feetLeft && step.type === "walk" ? `<div class="subtext text-center" data-nav-steps style="margin-top:-8px">~${Math.round(nav.feetLeft / state.strideFeet)} steps</div>` : ""}
         ${renderFloorMapSvg(state)}
         <div class="info-card" style="flex-direction:row;align-items:center;justify-content:space-between;gap:12px">
           <div style="min-width:0">
             <b>Next turn</b>
-            <div class="subtext">${nextStep ? formatStepInstruction(nextStep, state.units) : `Arrive at ${state.destination.name}`}</div>
+            <div class="subtext" data-next-turn>${formatUpcomingTurn(nextStep, nav.feetLeft, state.units, state.destination.name)}</div>
           </div>
           ${ic("turn_right", "color:#ffd60a;font-size:1.6em")}
         </div>
-        <div id="quickMuteZone" class="quick-mute-zone ${state.muted ? "is-muted" : ""}" role="button" tabindex="0" aria-label="Double-tap or two-finger tap to mute or resume spoken audio">
-          <div style="display:flex;align-items:center;gap:10px;min-width:0">
-            <span style="width:36px;height:36px;border-radius:50%;background:rgba(255,214,10,0.14);color:${ACCENT};display:grid;place-items:center;flex-shrink:0">
-              ${ic(state.muted ? "play_arrow" : "pause")}
-            </span>
-            <div style="min-width:0">
-              <div style="font-weight:700;font-size:0.88em">${state.muted ? "Audio Paused" : "Quick Mute Zone"}</div>
-              <div class="subtext" style="font-size:0.78em">Double-tap or 2-finger tap to ${state.muted ? "resume" : "mute"}</div>
-            </div>
-          </div>
-          <button class="chip-btn" data-action="toggleMute" style="flex-shrink:0">${state.muted ? "Resume" : "Mute"}</button>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr auto;gap:8px">
-          <button class="btn-primary" data-action="repeatInstruction">${ic("replay")} Repeat Instruction</button>
-          <button class="btn-secondary" data-action="reportHazard" aria-label="Report temporary hazard" style="width:auto;padding:0 14px" title="Report hazard">${ic("add_location_alt", "color:#ffd60a")}</button>
+        ${
+          state.deafblindMode
+            ? `<div class="quick-mute-zone is-muted">
+                 <div style="display:flex;align-items:center;gap:10px;min-width:0">
+                   <span style="width:36px;height:36px;border-radius:50%;background:rgba(56,189,248,0.14);color:#38bdf8;display:grid;place-items:center;flex-shrink:0">
+                     ${ic("vibration")}
+                   </span>
+                   <div style="min-width:0">
+                     <div style="font-weight:700;font-size:0.88em">Deafblind Haptic Mode</div>
+                     <div class="subtext" style="font-size:0.78em">Spoken audio off · Directional vibrations active</div>
+                   </div>
+                 </div>
+               </div>`
+            : `<div id="quickMuteZone" class="quick-mute-zone ${state.muted ? "is-muted" : ""}" role="button" tabindex="0" aria-label="Double-tap or two-finger tap to mute or resume spoken audio">
+                 <div style="display:flex;align-items:center;gap:10px;min-width:0">
+                   <span style="width:36px;height:36px;border-radius:50%;background:rgba(255,214,10,0.14);color:${ACCENT};display:grid;place-items:center;flex-shrink:0">
+                     ${ic(state.muted ? "play_arrow" : "pause")}
+                   </span>
+                   <div style="min-width:0">
+                     <div style="font-weight:700;font-size:0.88em">${state.muted ? "Audio Paused" : "Quick Mute Zone"}</div>
+                     <div class="subtext" style="font-size:0.78em">Double-tap or 2-finger tap to ${state.muted ? "resume" : "mute"}</div>
+                   </div>
+                 </div>
+                 <button class="chip-btn" data-action="toggleMute" style="flex-shrink:0">${state.muted ? "Resume" : "Mute"}</button>
+               </div>`
+        }
+        <button class="btn-primary" data-action="repeatInstruction">${ic("replay")} Repeat Instruction</button>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <button class="btn-secondary" data-action="whereAmI">${ic("my_location", "color:#38bdf8")} Where Am I?</button>
+          <button class="btn-secondary" data-action="reportHazard">${ic("add_location_alt", "color:#ffd60a")} Report Hazard</button>
         </div>
       `;
     },
@@ -359,7 +439,7 @@ export function renderScreen(state, locationLabel, animate = true) {
     obs: () => `
       <div style="display:flex;align-items:center;justify-content:center;gap:16px;padding:4px 0">
         ${renderArrowSvg(-40, 62)}
-        <div class="hero-metric">3 ft</div>
+        <div class="hero-metric">${formatDistance(3, state.units)}</div>
       </div>
       <div class="notice-banner danger" role="alert">
         ${ic("warning", "color:#ef4444")}
@@ -427,6 +507,7 @@ export function renderScreen(state, locationLabel, animate = true) {
       const nav = state.nav;
       const step = state.route[nav.stepIndex];
       return `
+        ${state.muted ? `<div class="notice-banner warning" style="padding:9px 12px">${ic("volume_off", "color:#fb923c")}<b>Audio Muted</b></div>` : ""}
         <div class="notice-banner danger" role="alert" style="justify-content:center;font-weight:800;letter-spacing:0.05em">
           EMERGENCY ROUTE ACTIVE
         </div>
@@ -460,19 +541,43 @@ export function renderScreen(state, locationLabel, animate = true) {
     emg: () => {
       const activeContacts = state.contacts.filter((c) => c.enabled).map((c) => c.name.split(" - ")[0]).join(", ");
       const timeNow = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      const payload = state.lastDispatchPayload;
+      const circumference = 339.292;
+      const progressRatio = state.alertSent ? 1 : Math.max(0, Math.min(1, state.countdown / 10));
+      const dashOffset = (circumference * (1 - progressRatio)).toFixed(2);
       return `
-        <div class="countdown-ring" data-emg-ring>${state.alertSent ? ic("check", "font-size:1em;color:#4ade80") : state.countdown}</div>
+        <div class="countdown-ring" data-emg-ring>
+          <svg viewBox="0 0 124 124" class="countdown-svg" aria-hidden="true">
+            <circle cx="62" cy="62" r="54" stroke="rgba(239,68,68,0.22)" stroke-width="8" fill="rgba(239,68,68,0.08)"/>
+            <circle data-emg-progress cx="62" cy="62" r="54" stroke="#ef4444" stroke-width="8" fill="none" stroke-linecap="round" stroke-dasharray="${circumference}" stroke-dashoffset="${dashOffset}" transform="rotate(-90 62 62)"/>
+          </svg>
+          <span class="countdown-value" data-emg-count>${state.alertSent ? ic("phone_in_talk", "font-size:0.95em;color:#ef4444") : state.countdown}</span>
+        </div>
         <h2 class="text-center">${state.alertSent ? "Help Requested" : "Calling for Help"}</h2>
         <p class="subtext text-center" style="margin-top:-6px">${
           state.alertSent
-            ? `Alert sent to ${activeContacts || "emergency contacts"} with your accessibility profile.`
+            ? `Simulated emergency call placed to ${activeContacts || "emergency contacts"} with your accessibility profile.`
             : `${state.emergencyReason}. Cancel if you are safe and do not need assistance.`
         }</p>
-        <div class="info-card">
-          <b>Alert From:</b>
-          <div class="subtext">${locationLabel} · ${timeNow}</div>
-          <div class="subtext">Profile: ${state.disabilityProfile}</div>
-        </div>
+        ${
+          state.alertSent && payload
+            ? `<div class="info-card" style="border-color:rgba(239,68,68,0.6)">
+                 <div style="display:flex;justify-content:space-between;align-items:center">
+                   <span class="tag-badge danger">Simulated Dispatch</span>
+                   <span class="subtext" style="font-size:0.78em">${payload.timestamp}</span>
+                 </div>
+                 <div class="subtext"><b>To:</b> ${payload.recipients || "No active recipients"}</div>
+                 <div class="subtext"><b>Location:</b> ${payload.location}</div>
+                 <div class="subtext"><b>Profile:</b> ${payload.profile}</div>
+                 <div class="subtext"><b>Message:</b> “THEIA Alert: ${payload.reason}. Stay-in-place beacon active.”</div>
+                 <div class="subtext" style="font-size:0.75em;opacity:0.8">Demo only — no real calls or SMS sent.</div>
+               </div>`
+            : `<div class="info-card">
+                 <b>Alert From:</b>
+                 <div class="subtext">${locationLabel} · ${timeNow}</div>
+                 <div class="subtext">Profile: ${state.disabilityProfile}</div>
+               </div>`
+        }
         ${
           state.alertSent
             ? `<button class="btn-secondary btn-success-outline" data-action="dismissEmergency">${ic("check")} I am okay</button>`
@@ -521,6 +626,14 @@ export function renderScreen(state, locationLabel, animate = true) {
         <div class="subtext">Navigation ended safely.</div>
       </div>
       ${
+        state.lastArrivalNotice
+          ? `<div class="notice-banner success">
+               ${ic("mark_chat_read", "color:#4ade80")}
+               <div><b>Arrival Check-In Sent</b><br>${state.lastArrivalNotice}</div>
+             </div>`
+          : ""
+      }
+      ${
         state.destination.node === "ENT"
           ? ""
           : `<div class="subtext text-center">Begin a guided trip back to your start point.</div>
@@ -564,7 +677,11 @@ export function renderScreen(state, locationLabel, animate = true) {
       <button class="card" data-action="goScreen" data-val="cal">
         <div class="card-content">
           <div class="card-title">Step Calibration</div>
-          <div class="subtext">${state.strideFeet ? `Saved stride: ~${state.strideFeet} ft/step` : "Optional pace-based step estimates"}</div>
+          <div class="subtext">${
+            state.strideFeet
+              ? `Saved stride: ~${state.units === "Meters" ? `${(state.strideFeet * 0.3048).toFixed(2)} m/step` : `${state.strideFeet} ft/step`}`
+              : "Optional pace-based step estimates"
+          }</div>
         </div>
         <span class="card-chevron">${ic("arrow_forward")}</span>
       </button>
@@ -581,8 +698,12 @@ export function renderScreen(state, locationLabel, animate = true) {
           <span class="cal-dot" style="left:0%"></span>
           <span class="cal-dot" style="left:100%"></span>
         </div>
-        <div class="text-center" style="font-weight:800;color:${ACCENT};font-size:1.1em">10 ft / 3 m</div>
-        ${state.strideFeet ? `<div class="subtext text-center" style="margin-top:4px">Current saved stride: <b>~${state.strideFeet} ft/step</b></div>` : ""}
+        <div class="text-center" style="font-weight:800;color:${ACCENT};font-size:1.1em">${formatDistance(10, state.units)} (${state.units === "Meters" ? "10 ft" : "3 m"})</div>
+        ${
+          state.strideFeet
+            ? `<div class="subtext text-center" style="margin-top:4px">Current saved stride: <b>~${state.units === "Meters" ? `${(state.strideFeet * 0.3048).toFixed(2)} m/step` : `${state.strideFeet} ft/step`}</b></div>`
+            : ""
+        }
       </div>
       <div class="info-card" style="gap:10px">
         <div class="step-row"><span class="step-num">1</span><span class="subtext" style="color:#e4e4e7">Choose a familiar, clear path. Mark the distance.</span></div>
@@ -601,15 +722,15 @@ export function renderScreen(state, locationLabel, animate = true) {
       <div class="eyebrow">Settings</div>
       <h2>Customize THEIA to you</h2>
       <div class="info-card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
           <b>Voice Volume</b>
           <b data-volume-label style="color:${ACCENT}">${state.volume}%</b>
         </div>
-        <input type="range" min="0" max="100" value="${state.volume}" data-input="volume" aria-label="Voice volume" style="width:100%;accent-color:${ACCENT}">
+        <input type="range" min="0" max="100" value="${state.volume}" class="volume-slider" data-input="volume" aria-label="Voice volume" style="--pct:${state.volume}%">
       </div>
-      ${renderSelectCard("Speech rate", "Narration speed", "speechRate", SPEECH_RATES, state.speechRate)}
-      ${renderSelectCard("Instruction Frequency", "Distance update cadence", "frequency", INSTRUCTION_FREQUENCIES, state.frequency)}
-      ${renderSelectCard("Text Size", "Scale up to 200%", "textSize", TEXT_SIZES, state.textSize)}
+      ${renderSelectCard("Speech rate", "Narration speed", "speechRate", SPEECH_RATES, state.speechRate, state.openPrefMenu)}
+      ${renderSelectCard("Instruction Frequency", "Distance update cadence", "frequency", INSTRUCTION_FREQUENCIES, state.frequency, state.openPrefMenu)}
+      ${renderSelectCard("Text Size", "Scale up to 200%", "textSize", TEXT_SIZES, state.textSize, state.openPrefMenu)}
       <button class="card ${state.highContrast ? "card-selected" : ""}" data-action="cyclePref" data-val="highContrast" role="switch" aria-checked="${!!state.highContrast}">
         <div class="card-content">
           <div class="card-title">Maximum Contrast (7:1+)</div>
@@ -617,15 +738,32 @@ export function renderScreen(state, locationLabel, animate = true) {
         </div>
         <span class="toggle-pill ${state.highContrast ? "on" : ""}" aria-hidden="true"><span class="toggle-knob"></span></span>
       </button>
-      ${renderSelectCard("Distance Units", "Measurement system", "units", ["Feet", "Meters"], state.units)}
+      ${renderSelectCard("Distance Units", "Measurement system", "units", ["Feet", "Meters"], state.units, state.openPrefMenu)}
+      <button class="card ${state.audioChimes ? "card-selected" : ""}" data-action="cyclePref" data-val="audioChimes" role="switch" aria-checked="${!!state.audioChimes}">
+        <div class="card-content">
+          <div class="card-title">Audio Chimes (Earcons)</div>
+          <div class="subtext">${state.audioChimes ? "Subtle tones before turns, alerts & arrival" : "Spoken voice only (no tones)"}</div>
+        </div>
+        <span class="toggle-pill ${state.audioChimes ? "on" : ""}" aria-hidden="true"><span class="toggle-knob"></span></span>
+      </button>
       <button class="card" data-action="goScreen" data-val="off">
         <div class="card-content"><div class="card-title">Offline Maps</div><div class="subtext">Download building floor plans</div></div>
         <span class="card-chevron">${ic("download_for_offline")}</span>
       </button>
       <button class="card" data-action="goScreen" data-val="caretakerPin" style="border-color:rgba(255,214,10,0.5)">
-        <div class="card-content"><div class="card-title">Caretaker &amp; Emergency Contacts</div><div class="subtext">PIN-protected safety profile (Demo: 1234)</div></div>
+        <div class="card-content"><div class="card-title">Caretaker &amp; Emergency Contacts</div><div class="subtext">PIN-protected safety profile${state.caretakerPin === "1234" ? " (Demo: 1234)" : ""}</div></div>
         <span class="card-chevron">${ic("lock")}</span>
       </button>
+      <details class="secondary-section">
+        <summary>
+          <span>Keyboard &amp; Voice Shortcuts</span>
+          ${ic("expand_more", "font-size:1.4em")}
+        </summary>
+        <div class="info-card" style="margin-top:8px;font-size:0.84em;gap:6px">
+          <div><b>Keys:</b> <code>R</code> Repeat · <code>M</code> Mute · <code>L</code> Where am I · <code>W</code> Walk ${formatDistance(10, state.units)} · <code>H</code> Hazard · <code>Esc</code> Back/Close</div>
+          <div class="subtext"><b>Voice:</b> “Where am I”, “Repeat”, “Mute”, “Report hazard”, “Return to start”, “Call for help”</div>
+        </div>
+      </details>
     `,
 
     off: () => {
@@ -674,7 +812,7 @@ export function renderScreen(state, locationLabel, animate = true) {
       <h2>Enter 4-Digit PIN</h2>
       <div class="notice-banner neutral">
         ${ic("lock", "color:#38bdf8")}
-        <div>Protects emergency contacts and accessibility profiles. Demo PIN: <b>1234</b></div>
+        <div>Protects emergency contacts and accessibility profiles.${state.caretakerPin === "1234" ? " Demo PIN: <b>1234</b>" : ""}</div>
       </div>
       <div class="pin-display">${state.pinEntry.padEnd(4, "•")}</div>
       <div class="pin-grid">
@@ -685,58 +823,108 @@ export function renderScreen(state, locationLabel, animate = true) {
       <button class="btn-secondary" data-action="goScreen" data-val="pref">Cancel</button>
     `,
 
-    caretaker: () => `
-      <div class="eyebrow">Safety Profile</div>
-      <h2>Emergency Contacts</h2>
-      <p class="subtext" style="margin-top:-4px">Select who would receive alerts in emergency situations.</p>
-      ${
-        state.pendingCaretakerSync
-          ? `<div class="notice-banner warning">${ic("hourglass_top", "color:#fb923c")}<div><b>Update Queued</b><br>Changes apply once you stop walking.</div></div>`
-          : ""
-      }
-      ${state.contacts
-        .map(
-          (c, i) => `<button class="card" data-action="toggleContact" data-val="${i}" aria-pressed="${!!c.enabled}">
-            <div class="card-content">
-              <div class="card-title">${c.name}</div>
-              <div class="subtext">${c.phone}</div>
-            </div>
-            <span class="card-chevron" style="color:${c.enabled ? "var(--success)" : "#71717a"}">${ic(c.enabled ? "check" : "radio_button_unchecked")}</span>
-          </button>`
-        )
-        .join("")}
-      ${
-        state.showAddContactForm
-          ? `<div class="inline-form">
-               <b>Add Trusted Contact</b>
-               <input id="newContactName" placeholder="Name & relationship (e.g. Maya - Sister)" aria-label="Contact name">
-               <input id="newContactPhone" placeholder="Phone number (e.g. (509) 555-0142)" aria-label="Contact phone">
-               <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-                 <button class="btn-primary" data-action="saveNewContact">Add</button>
-                 <button class="btn-secondary" data-action="toggleAddContactForm">Cancel</button>
-               </div>
-             </div>`
-          : `<button class="card" data-action="toggleAddContactForm">
-               <div class="card-content"><div class="card-title">Add a Contact</div></div>
-               <span class="card-chevron">${ic("person_add")}</span>
-             </button>`
-      }
-      <button class="card" data-action="toggleAskBeforeSaving" role="switch" aria-checked="${!!state.askBeforeSaving}">
-        <div class="card-content">
-          <div class="card-title">Caretaker Changes</div>
-          <div class="subtext">${state.askBeforeSaving ? "Ask user before saving" : "Apply immediately"}</div>
-        </div>
-        <span class="toggle-pill ${state.askBeforeSaving ? "on" : ""}" aria-hidden="true"><span class="toggle-knob"></span></span>
-      </button>
-      <button class="card" data-action="cycleDisabilityProfile">
-        <div class="card-content">
-          <div class="card-title">Accessibility Profile</div>
-          <div class="subtext">${state.disabilityProfile}</div>
-        </div>
-        <span class="card-chevron">${ic("sync")}</span>
-      </button>
-      <button class="btn-primary" data-action="saveCaretakerChanges">${ic("save")} Save Contacts</button>
-    `
+    caretaker: () => {
+      const enabledCount = state.contacts.filter((c) => c.enabled).length;
+      return `
+        <div class="eyebrow">Safety Profile</div>
+        <h2>Emergency Contacts</h2>
+        <p class="subtext" style="margin-top:-4px">Select, prioritize, or edit who receives emergency and arrival alerts.</p>
+        ${
+          state.pendingCaretakerSync
+            ? `<div class="notice-banner warning">${ic("hourglass_top", "color:#fb923c")}<div><b>Update Queued</b><br>Changes apply once you stop walking.</div></div>`
+            : ""
+        }
+        ${
+          enabledCount === 0
+            ? `<div class="notice-banner danger">${ic("warning", "color:#ef4444")}<div><b>No Active Contacts</b><br>Enable at least one contact so emergency alerts can be sent.</div></div>`
+            : ""
+        }
+        ${state.contacts
+          .map((c, i) =>
+            state.editingContactIdx === i
+              ? `<div class="inline-form">
+                   <b>Edit Contact</b>
+                   <input id="editContactName" value="${c.name.replace(/"/g, "&quot;")}" aria-label="Edit contact name">
+                   <input id="editContactPhone" value="${c.phone.replace(/"/g, "&quot;")}" aria-label="Edit contact phone">
+                   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                     <button class="btn-primary" data-action="saveEditedContact" data-val="${i}">Save</button>
+                     <button class="btn-secondary" data-action="cancelEditContact">Cancel</button>
+                   </div>
+                 </div>`
+              : `<div class="contact-item">
+                   <button class="contact-item-main" data-action="toggleContact" data-val="${i}" aria-pressed="${!!c.enabled}">
+                     <div class="card-content">
+                       <div class="card-title">${c.name} ${i === 0 && c.enabled ? '<span class="tag-badge green">Primary</span>' : ""}</div>
+                       <div class="subtext">${c.phone}</div>
+                     </div>
+                     <span class="card-chevron" style="color:${c.enabled ? "var(--success)" : "#71717a"}">${ic(c.enabled ? "check" : "radio_button_unchecked")}</span>
+                   </button>
+                   <div class="contact-item-actions">
+                     ${i > 0 ? `<button class="mini-btn" data-action="moveContactUp" data-val="${i}" aria-label="Move ${c.name} higher">${ic("arrow_upward", "font-size:1.1em")} Priority</button>` : ""}
+                     <button class="mini-btn" data-action="startEditContact" data-val="${i}" aria-label="Edit ${c.name}">${ic("edit", "font-size:1.1em")} Edit</button>
+                     ${state.contacts.length > 1 ? `<button class="mini-btn danger" data-action="removeContact" data-val="${i}" aria-label="Remove ${c.name}">${ic("delete", "font-size:1.1em")} Remove</button>` : ""}
+                   </div>
+                 </div>`
+          )
+          .join("")}
+        ${
+          state.showAddContactForm
+            ? `<div class="inline-form">
+                 <b>Add Trusted Contact</b>
+                 <input id="newContactName" placeholder="Name & relationship (e.g. Maya - Sister)" aria-label="Contact name">
+                 <input id="newContactPhone" placeholder="Phone number (e.g. (509) 555-0142)" aria-label="Contact phone">
+                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                   <button class="btn-primary" data-action="saveNewContact">Add</button>
+                   <button class="btn-secondary" data-action="toggleAddContactForm">Cancel</button>
+                 </div>
+               </div>`
+            : `<button class="card" data-action="toggleAddContactForm">
+                 <div class="card-content"><div class="card-title">Add a Contact</div></div>
+                 <span class="card-chevron">${ic("person_add")}</span>
+               </button>`
+        }
+        <button class="card ${state.notifyOnArrival ? "card-selected" : ""}" data-action="toggleNotifyOnArrival" role="switch" aria-checked="${!!state.notifyOnArrival}">
+          <div class="card-content">
+            <div class="card-title">Notify Helper on Arrival</div>
+            <div class="subtext">${state.notifyOnArrival ? "Send simulated check-in when destination reached" : "Emergency alerts only"}</div>
+          </div>
+          <span class="toggle-pill ${state.notifyOnArrival ? "on" : ""}" aria-hidden="true"><span class="toggle-knob"></span></span>
+        </button>
+        <button class="card" data-action="toggleAskBeforeSaving" role="switch" aria-checked="${!!state.askBeforeSaving}">
+          <div class="card-content">
+            <div class="card-title">Caretaker Changes</div>
+            <div class="subtext">${state.askBeforeSaving ? "Ask user before saving" : "Apply immediately"}</div>
+          </div>
+          <span class="toggle-pill ${state.askBeforeSaving ? "on" : ""}" aria-hidden="true"><span class="toggle-knob"></span></span>
+        </button>
+        <button class="card" data-action="cycleDisabilityProfile">
+          <div class="card-content">
+            <div class="card-title">Accessibility Profile</div>
+            <div class="subtext">${state.disabilityProfile}</div>
+          </div>
+          <span class="card-chevron">${ic("sync")}</span>
+        </button>
+        ${
+          state.showPinForm
+            ? `<div class="inline-form">
+                 <b>Change Caretaker PIN</b>
+                 <input id="newCaretakerPin" maxlength="4" inputmode="numeric" pattern="[0-9]*" placeholder="Enter new 4-digit PIN" aria-label="New 4-digit caretaker PIN">
+                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                   <button class="btn-primary" data-action="saveCaretakerPin">Update PIN</button>
+                   <button class="btn-secondary" data-action="togglePinForm">Cancel</button>
+                 </div>
+               </div>`
+            : `<button class="card" data-action="togglePinForm">
+                 <div class="card-content">
+                   <div class="card-title">Change Caretaker PIN</div>
+                   <div class="subtext">Current PIN: ${"•".repeat(4)}</div>
+                 </div>
+                 <span class="card-chevron">${ic("password")}</span>
+               </button>`
+        }
+        <button class="btn-primary" data-action="saveCaretakerChanges">${ic("save")} Save Contacts</button>
+      `;
+    }
   };
 
   const content = (screens[state.screen] || screens.dest)();

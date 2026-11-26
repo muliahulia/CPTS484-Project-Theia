@@ -12,6 +12,8 @@ import {
   formatDistance,
   calculatePath,
   formatStepInstruction,
+  formatResumeInstruction,
+  formatUpcomingTurn,
   summarizeRoute
 } from "./routing.js";
 import {
@@ -19,8 +21,10 @@ import {
   announceOutput,
   renderLiveBanner,
   renderHapticIdle,
+  playEarcon,
   stopHaptics,
   stopSpeech,
+  waitForSpeech,
   createFallDetector
 } from "./sensors.js";
 import { renderScreen, getCurrentCoordinates } from "./ui.js";
@@ -58,6 +62,7 @@ function createInitialState() {
     countdown: 10,
     alertSent: false,
     emergencyReason: "Fall detected",
+    lastDispatchPayload: null,
     prevScreen: "dest",
     fireReturnSnapshot: null,
     autoWalkTimer: null,
@@ -69,13 +74,23 @@ function createInitialState() {
     reportedHazards: [],
     muted: false,
     deafblindMode: false,
+    audioChimes: true,
     isReturnTrip: false,
     pinEntry: "",
+    caretakerPin: "1234",
     pendingCaretakerSync: false,
     askBeforeSaving: true,
+    notifyOnArrival: false,
+    lastArrivalNotice: "",
     showAddContactForm: false,
+    editingContactIdx: null,
+    showPinForm: false,
+    showCaretakerApproval: false,
     showCalendarPrompt: false,
     mapViewFloor: null,
+    openPrefMenu: null,
+    voiceMicStatus: "",
+    voiceExternalMatch: "",
     liveText: "",
     disabilityProfile: PROFILES[0],
     contacts: [
@@ -91,6 +106,9 @@ let telemetryLogs = [];
 let emergencyTimer = null;
 let speechRecognizer = null;
 let hapticPreviewTimers = [];
+let scenarioRunId = 0;
+let scenarioTimer = null;
+let activeScenario = null;
 let lastRenderedScreen = null;
 let lastScreenHtml = "";
 let lastScreenPatchKey = "";
@@ -101,6 +119,43 @@ let lastModalHtml = "";
 function clearHapticPreviews() {
   hapticPreviewTimers.forEach(clearTimeout);
   hapticPreviewTimers = [];
+}
+
+function clearScenario(shouldRender = false) {
+  scenarioRunId++;
+  clearTimeout(scenarioTimer);
+  scenarioTimer = null;
+  if (activeScenario) {
+    activeScenario = null;
+    $("#phoneFrame")?.classList.remove("scenario-locked");
+    if (shouldRender) syncSimulatorControls();
+  }
+}
+
+function resetForScenario() {
+  stopAutoWalk();
+  stopSpeech();
+  stopHaptics();
+  clearHapticPreviews();
+  clearInterval(emergencyTimer);
+  const preservedPrefs = {
+    units: state.units,
+    speechRate: state.speechRate,
+    volume: state.volume,
+    frequency: state.frequency,
+    textSize: state.textSize,
+    highContrast: state.highContrast,
+    deafblindMode: state.deafblindMode,
+    audioChimes: state.audioChimes,
+    strideFeet: state.strideFeet
+  };
+  state = createInitialState();
+  Object.assign(state, preservedPrefs);
+  state.showSafetyGate = false;
+  lastRenderedScreen = null;
+  lastScreenHtml = "";
+  lastScreenPatchKey = "";
+  renderApp();
 }
 
 try {
@@ -121,7 +176,10 @@ function persistPreferences() {
         textSize: state.textSize,
         highContrast: state.highContrast,
         deafblindMode: state.deafblindMode,
+        audioChimes: state.audioChimes,
         askBeforeSaving: state.askBeforeSaving,
+        notifyOnArrival: state.notifyOnArrival,
+        caretakerPin: state.caretakerPin,
         strideFeet: state.strideFeet,
         contacts: state.contacts,
         disabilityProfile: state.disabilityProfile
@@ -156,9 +214,15 @@ function stopAutoWalk() {
   state.autoWalkTimer = null;
   if (state.pendingCaretakerSync) {
     state.pendingCaretakerSync = false;
-    persistPreferences();
-    logEvent("NFR-13: User stationary - queued caretaker settings applied.");
-    speak("Caretaker settings updated.");
+    if (state.askBeforeSaving) {
+      state.showCaretakerApproval = true;
+      logEvent("NFR-13: User stationary — requesting approval for queued caretaker changes.");
+      speak("You have stopped walking. Approve queued caretaker changes?");
+    } else {
+      persistPreferences();
+      logEvent("NFR-13: User stationary - queued caretaker settings applied.");
+      speak("Caretaker settings updated.");
+    }
   }
 }
 
@@ -178,6 +242,7 @@ function beginTurnByTurn() {
   state.inQuietZone = false;
   state.mapViewFloor = null;
   state.screen = "nav";
+  playEarcon("turn", state);
   speak(formatStepInstruction(state.route[0], state.units));
   renderApp();
 }
@@ -223,6 +288,7 @@ function startEmergencyCountdown(reason) {
   stopAutoWalk();
   state.showSafetyGate = false;
   state.showCalendarPrompt = false;
+  state.showCaretakerApproval = false;
   state.showAddContactForm = false;
   state.prevScreen = state.screen;
   state.screen = "emg";
@@ -230,6 +296,7 @@ function startEmergencyCountdown(reason) {
   state.emergencyReason = reason;
   state.countdown = 10;
 
+  playEarcon("alert", state);
   speak(`${reason}. Calling for help in 10 seconds. Say cancel alert if you are okay.`);
   triggerVibration([300, 100, 300], "Emergency alert");
 
@@ -251,13 +318,30 @@ const fallDetector = createFallDetector((reason) => startEmergencyCountdown(reas
 function dispatchEmergency(reason) {
   clearInterval(emergencyTimer);
   state.alertSent = true;
-  const recipients = state.contacts
-    .filter((c) => c.enabled)
-    .map((c) => c.name.split(" - ")[0])
-    .join(", ");
+  const activeContacts = state.contacts.filter((c) => c.enabled);
+  const recipients = activeContacts.length
+    ? activeContacts.map((c) => c.name.split(" - ")[0]).join(", ")
+    : "Local Emergency Services (911)";
+  const recipientDetails = activeContacts.length
+    ? activeContacts.map((c) => `${c.name.split(" - ")[0]} (${c.phone})`).join(", ")
+    : "Local Emergency Services (911)";
+  const location = currentLocationLabel();
+  const timestamp = new Date().toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+
+  state.lastDispatchPayload = {
+    recipients: recipientDetails,
+    reason,
+    location,
+    profile: state.disabilityProfile,
+    timestamp
+  };
 
   logEvent(
-    `DISPATCH (simulated) to [${recipients}]: ${reason} | Location: ${currentLocationLabel()} | Profile: ${state.disabilityProfile}`
+    `DISPATCH (simulated) to [${recipients}]: ${reason} | Location: ${location} | Profile: ${state.disabilityProfile}`
   );
   speak("Help has been requested with your accessibility profile attached. Stay where you are.");
   renderApp();
@@ -266,12 +350,22 @@ function dispatchEmergency(reason) {
 function startSpeechRecognition() {
   try {
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!Recognition) return;
+    if (!Recognition) {
+      state.voiceMicStatus = "Browser mic speech API unavailable — tap a phrase below or use Simulator voice input.";
+      return;
+    }
+    state.voiceMicStatus = "";
     speechRecognizer = new Recognition();
     speechRecognizer.lang = "en-US";
     speechRecognizer.onresult = (e) => handleSpokenText(e.results[0][0].transcript);
+    speechRecognizer.onerror = () => {
+      state.voiceMicStatus = "Microphone unavailable or no speech detected. Tap a phrase below or type in Simulator.";
+      if (state.screen === "voice") renderApp();
+    };
     speechRecognizer.start();
-  } catch (e) {}
+  } catch (e) {
+    state.voiceMicStatus = "Microphone unavailable — tap a phrase below or use Simulator voice input.";
+  }
 }
 
 function handleSpokenText(transcript) {
@@ -279,12 +373,21 @@ function handleSpokenText(transcript) {
   const lower = transcript.toLowerCase();
 
   if (state.screen === "emg" && /cancel|okay/.test(lower)) return actions.cancelEmergency();
-  if (state.screen === "nav" && /repeat/.test(lower)) return actions.repeatInstruction();
+  if (/where am i|my location|where\b/.test(lower)) return actions.whereAmI();
+  if (/call for help|emergency|\bsos\b|\bhelp\b/.test(lower) && state.screen !== "emg") return actions.requestHelp();
+  if (/return to start|reverse route|go back to start/.test(lower) && state.destination && state.destination.node !== "ENT") {
+    return actions.returnToStart();
+  }
+  if (["nav", "obs", "reroute", "sig", "fire"].includes(state.screen) && /repeat/.test(lower)) {
+    return actions.repeatInstruction();
+  }
   if (state.screen === "nav" && /hazard/.test(lower)) return actions.reportHazard();
-  if (/mute/.test(lower) && ["nav", "fire"].includes(state.screen)) return actions.toggleMute();
+  if (/mute|unmute/.test(lower) && ["nav", "fire"].includes(state.screen)) return actions.toggleMute();
 
   if (state.screen === "dest" || state.screen === "voice") {
     state.heardText = transcript;
+    state.voiceMicStatus = "";
+    state.voiceExternalMatch = "";
     state.voiceCandidate = /bath|restroom|accessible/.test(lower)
       ? "BATH"
       : /105/.test(lower)
@@ -292,6 +395,10 @@ function handleSpokenText(transcript) {
       : /214|class/.test(lower)
       ? "R214"
       : null;
+    if (!state.voiceCandidate && /1aa|holland|terrell|library|rec|g04|spark/.test(lower)) {
+      state.voiceExternalMatch = "That building is outside the Schweitzer Hall prototype map.";
+      speak("That building is outside this prototype's map. Select Room 105, Room 214, or Accessible Bathroom.");
+    }
     state.screen = "voice";
     renderApp();
   }
@@ -314,6 +421,10 @@ const actions = {
     }
     state.pinEntry = "";
     state.showAddContactForm = false;
+    state.editingContactIdx = null;
+    state.showPinForm = false;
+    state.showCaretakerApproval = false;
+    state.openPrefMenu = null;
     state.screen = target;
     renderApp();
   },
@@ -321,6 +432,8 @@ const actions = {
     state.screen = "voice";
     state.heardText = "";
     state.voiceCandidate = null;
+    state.voiceExternalMatch = "";
+    state.voiceMicStatus = "";
     speak("I'm listening. Say a room, place, or facility type.");
     startSpeechRecognition();
     renderApp();
@@ -329,6 +442,8 @@ const actions = {
     stopSpeech();
     state.heardText = "";
     state.voiceCandidate = null;
+    state.voiceExternalMatch = "";
+    state.voiceMicStatus = "";
     startSpeechRecognition();
     renderApp();
   },
@@ -351,6 +466,7 @@ const actions = {
   confirmVoice() {
     stopSpeech();
     const place = PLACES.find((p) => p.node === state.voiceCandidate);
+    if (!place) return;
     state.destination = { name: place.name, node: place.node };
     state.routeMode = "comfort";
     planRoutes();
@@ -372,6 +488,8 @@ const actions = {
     if (!state.route) return;
     if (state.isReturnTrip) return beginTurnByTurn();
     state.screen = "entr";
+    playEarcon("confirm", state);
+    triggerVibration([140, 80, 140], "Entered building");
     speak("You are at Schweitzer Engineering Hall. Switching to indoor navigation.");
     renderApp();
   },
@@ -380,7 +498,8 @@ const actions = {
   },
   resumeAfterReroute() {
     state.screen = "nav";
-    speak(formatStepInstruction(state.route[state.nav.stepIndex], state.units));
+    const step = state.route[state.nav.stepIndex];
+    speak(formatResumeInstruction(step, state.nav.feetLeft, state.units));
     renderApp();
   },
   repeatInstruction() {
@@ -392,7 +511,7 @@ const actions = {
     } else if (state.screen === "sig") {
       speak("Please stop. Your location is inaccurate. Stay in place while THEIA reconnects.");
     } else if (nav) {
-      speak(formatStepInstruction(state.route[nav.stepIndex], state.units));
+      speak(formatResumeInstruction(state.route[nav.stepIndex], nav.feetLeft, state.units));
     }
   },
   walk() {
@@ -416,9 +535,11 @@ const actions = {
       state.obstacleLabel = currentStep.naturalObstacle;
       stopAutoWalk();
       state.screen = "obs";
-      speak(`Obstacle ahead, 3 feet: ${state.obstacleLabel}. Follow the arrow around it when safe.`);
+      const obsDist = formatDistance(3, state.units);
+      playEarcon("alert", state);
+      speak(`Obstacle ahead, ${obsDist}: ${state.obstacleLabel}. Follow the arrow around it when safe.`);
       triggerVibration([200, 100, 200], "Obstacle ahead");
-      logEvent(`Depth sensor: ${state.obstacleLabel} (3 ft ahead)`);
+      logEvent(`Depth sensor: ${state.obstacleLabel} (${obsDist} ahead)`);
       renderApp();
       return;
     }
@@ -443,16 +564,40 @@ const actions = {
 
       nav.stepIndex++;
       if (nav.stepIndex >= state.route.length) {
+        const arrivedFromNav = state.screen === "nav";
         stopAutoWalk();
         state.screen = "arr";
         state.fireReturnSnapshot = null;
         state.inQuietZone = false;
+        if (arrivedFromNav && state.notifyOnArrival) {
+          const helpers = state.contacts
+            .filter((c) => c.enabled && !/security|dispatch/i.test(c.name))
+            .map((c) => c.name.split(" - ")[0]);
+          const targets = helpers.length
+            ? helpers
+            : state.contacts.filter((c) => c.enabled).map((c) => c.name.split(" - ")[0]);
+          if (targets.length) {
+            state.lastArrivalNotice = `Simulated arrival check-in sent to ${targets.join(", ")}.`;
+            logEvent(`CHECK-IN (simulated) to [${targets.join(", ")}]: Arrived safely at ${state.destination.name}.`);
+          } else {
+            state.lastArrivalNotice = "";
+          }
+        } else {
+          state.lastArrivalNotice = "";
+        }
+        playEarcon("arrived", state);
         speak(`You have arrived at ${state.destination.name}.`);
         triggerVibration(400, "Arrived at destination");
       } else {
-        nav.feetLeft = state.route[nav.stepIndex].feet;
+        const nextStep = state.route[nav.stepIndex];
+        const prevFloor = MAP_NODES[currentStep.from][2];
+        const newFloor = MAP_NODES[nextStep.from][2];
+        const floorPrefix =
+          newFloor !== prevFloor ? `Now on Floor ${newFloor} at ${MAP_NODES[nextStep.from][3]}. ` : "";
+        nav.feetLeft = nextStep.feet;
         state.mapViewFloor = null;
-        speak(formatStepInstruction(state.route[nav.stepIndex], state.units));
+        playEarcon("turn", state);
+        speak(floorPrefix + formatStepInstruction(nextStep, state.units));
       }
     }
     renderApp();
@@ -479,9 +624,11 @@ const actions = {
     state.showCalendarPrompt = false;
     state.obstacleLabel = "Dropped backpack on hallway floor";
     state.screen = "obs";
-    speak("Obstacle ahead, 3 feet. Follow the arrow around the obstacle when safe.");
+    const obsDist = formatDistance(3, state.units);
+    playEarcon("alert", state);
+    speak(`Obstacle ahead, ${obsDist}. Follow the arrow around the obstacle when safe.`);
     triggerVibration([200, 100, 200], "Obstacle ahead");
-    logEvent("Depth sensor: floor-level obstacle at 3 ft.");
+    logEvent(`Depth sensor: floor-level obstacle at ${obsDist}.`);
     renderApp();
   },
   clearObstacle() {
@@ -493,7 +640,7 @@ const actions = {
       return;
     }
     state.screen = "nav";
-    speak(`Path clear. ${formatStepInstruction(state.route[state.nav.stepIndex], state.units)}`);
+    speak(`Path clear. ${formatResumeInstruction(state.route[state.nav.stepIndex], state.nav.feetLeft, state.units)}`);
     renderApp();
   },
   toggleClosure() {
@@ -543,7 +690,7 @@ const actions = {
       speak("Please stop. Your location is inaccurate. Stay in place while THEIA reconnects.");
     } else if (state.signalAvailable && state.screen === "sig") {
       state.screen = "nav";
-      speak(`Location restored. ${formatStepInstruction(state.route[state.nav.stepIndex], state.units)}`);
+      speak(`Location restored. ${formatResumeInstruction(state.route[state.nav.stepIndex], state.nav.feetLeft, state.units)}`);
     }
     renderApp();
   },
@@ -590,6 +737,7 @@ const actions = {
     state.mapViewFloor = null;
     state.screen = "fire";
 
+    playEarcon("alert", state);
     speak(`Fire alarm detected. Rerouting to the nearest exterior exit. Elevators are disabled. ${formatStepInstruction(state.route[0], state.units)}.`);
     triggerVibration([500, 150, 500, 150, 500], "Fire alarm evacuation");
     logEvent(`FR-23 FIRE OVERRIDE: Elevator-free exit route active from ${MAP_NODES[originNode][3]}.`);
@@ -625,10 +773,19 @@ const actions = {
     renderApp();
   },
   confirmHazardPin() {
-    state.reportedHazards.push(state.route[state.nav.stepIndex].edgeIndex);
+    const edgeIdx = state.route[state.nav.stepIndex].edgeIndex;
+    if (!state.reportedHazards.includes(edgeIdx)) state.reportedHazards.push(edgeIdx);
     logEvent(`FR-30: Hazard pin dropped at ${currentLocationLabel()}.`);
     state.screen = "nav";
     speak("Hazard pinned. Future routes will avoid this segment.");
+    renderApp();
+  },
+  clearHazards() {
+    if (!state.reportedHazards.length) return;
+    state.reportedHazards = [];
+    logEvent("Facility update: cleared all reported hazard pins.");
+    if (state.destination && state.screen === "route") planRoutes();
+    speak("Reported hazards cleared.");
     renderApp();
   },
   cancelHazardPin() {
@@ -723,6 +880,7 @@ const actions = {
     } catch (e) {}
     logEvent("Emergency countdown cancelled by user.");
     state.alertSent = false;
+    state.lastDispatchPayload = null;
     state.screen = state.prevScreen === "emg" ? "dest" : state.prevScreen;
     speak("Alert cancelled.");
     renderApp();
@@ -730,6 +888,7 @@ const actions = {
   dismissEmergency() {
     stopSpeech();
     state.alertSent = false;
+    state.lastDispatchPayload = null;
     state.screen = state.prevScreen === "emg" ? "dest" : state.prevScreen;
     renderApp();
   },
@@ -766,6 +925,7 @@ const actions = {
     input.value = "";
   },
   resetDemo() {
+    clearScenario();
     stopAutoWalk();
     stopSpeech();
     stopHaptics();
@@ -783,10 +943,194 @@ const actions = {
     renderApp();
     logEvent("Demo reset.");
   },
+  stopScenario() {
+    if (!activeScenario) return;
+    clearScenario(true);
+    stopAutoWalk();
+    stopSpeech();
+    logEvent("Walkthrough scenario stopped by user.");
+  },
+  async runScenario(kind) {
+    clearScenario();
+    resetForScenario();
+    const runId = scenarioRunId;
+    activeScenario = kind;
+    $("#phoneFrame")?.classList.add("scenario-locked");
+    syncSimulatorControls();
+
+    const wait = (ms) =>
+      new Promise((resolve) => {
+        scenarioTimer = setTimeout(() => resolve(runId === scenarioRunId), ms);
+      });
+
+    const afterSpeech = async (pauseMs = 550) => {
+      await waitForSpeech(7000);
+      if (runId !== scenarioRunId) return false;
+      return pauseMs > 0 ? wait(pauseMs) : true;
+    };
+
+    const walkUntil = async (stopCheck, stepMs = 800) => {
+      let guard = 0;
+      while (runId === scenarioRunId && !stopCheck() && guard++ < 40) {
+        actions.walk();
+        if (!(await afterSpeech(250))) return false;
+        if (stopCheck()) break;
+        if (!(await wait(stepMs))) return false;
+      }
+      return runId === scenarioRunId;
+    };
+
+    const waitUntil = async (pred, maxWaitMs = 5000) => {
+      const start = Date.now();
+      while (runId === scenarioRunId && !pred() && Date.now() - start < maxWaitMs) {
+        if (!(await wait(120))) return false;
+      }
+      return runId === scenarioRunId;
+    };
+
+    if (kind === "closure") {
+      logEvent("[Scenario 1] Medium: Accessible Bathroom + Side Hallway Closure");
+      if (!(await wait(700))) return;
+      actions.pickPlace(0);
+      if (!(await afterSpeech(1200))) return;
+      actions.startRoute();
+      if (!(await afterSpeech(800))) return;
+      actions.continueIndoor();
+      if (!(await afterSpeech(700))) return;
+      if (!(await walkUntil(() => state.screen !== "nav" || state.route[state.nav.stepIndex]?.from === "EL2"))) return;
+      if (!(await wait(700))) return;
+      actions.toggleClosure();
+      if (!(await afterSpeech(900))) return;
+      actions.resumeAfterReroute();
+      if (!(await afterSpeech(700))) return;
+      if (!(await walkUntil(() => state.screen !== "nav"))) return;
+      await afterSpeech(500);
+      logEvent("[Scenario 1] Completed safely.");
+    } else if (kind === "obstacle") {
+      logEvent("[Scenario 2] Complex: Voice Search + Obstacle + Hazard Pin + Return");
+      if (!(await wait(700))) return;
+      actions.startVoiceInput();
+      if (!(await afterSpeech(700))) return;
+      actions.simulateVoicePhrase("Room 105");
+      if (!(await afterSpeech(1200))) return;
+      actions.confirmVoice();
+      if (!(await afterSpeech(1200))) return;
+      actions.startRoute();
+      if (!(await afterSpeech(800))) return;
+      actions.continueIndoor();
+      if (!(await afterSpeech(700))) return;
+      if (!(await walkUntil(() => state.screen !== "nav"))) return;
+      if (state.screen === "obs") {
+        if (!(await afterSpeech(1000))) return;
+        actions.clearObstacle();
+        if (!(await afterSpeech(700))) return;
+      }
+      actions.reportHazard();
+      if (!(await afterSpeech(800))) return;
+      actions.confirmHazardPin();
+      if (!(await afterSpeech(700))) return;
+      if (!(await walkUntil(() => state.screen !== "nav"))) return;
+      if (!(await afterSpeech(900))) return;
+      actions.returnToStart();
+      logEvent("[Scenario 2] Completed with return route ready.");
+    } else if (kind === "crisis") {
+      logEvent("[Scenario 3] Multi-Event Crisis: Sequential Alerts + Fire Priority Override");
+      if (!(await wait(800))) return;
+      actions.triggerCalendarPrompt();
+      if (!(await afterSpeech(1600))) return;
+      actions.startNextClass();
+      if (!(await afterSpeech(1600))) return;
+      actions.startRoute();
+      if (!(await afterSpeech(1200))) return;
+      actions.continueIndoor();
+      if (!(await afterSpeech(900))) return;
+      if (!(await walkUntil(() => state.screen !== "nav" || MAP_NODES[state.route[state.nav.stepIndex]?.from]?.[2] === 2))) return;
+      if (!(await wait(1200))) return;
+
+      logEvent("[Scenario 3] Step 1: Positioning signal drops independently.");
+      actions.toggleSignal();
+      if (!(await afterSpeech(2200))) return;
+      actions.toggleSignal();
+      if (!(await afterSpeech(1400))) return;
+
+      actions.walk();
+      if (!(await afterSpeech(1000))) return;
+
+      logEvent("[Scenario 3] Step 2: Floor obstacle pauses route — Fire Alarm overrides it.");
+      actions.triggerObstacle();
+      if (!(await afterSpeech(2000))) return;
+      actions.triggerFireAlarm();
+      if (!(await afterSpeech(1800))) return;
+
+      actions.walk();
+      if (!(await afterSpeech(900))) return;
+      actions.walk();
+      if (!(await afterSpeech(1000))) return;
+
+      logEvent("[Scenario 3] Step 3: Fall detected during evacuation — voice cancel resumes exit.");
+      actions.simulateFall();
+      if (!(await waitUntil(() => state.screen === "emg"))) return;
+      if (!(await afterSpeech(3500))) return;
+      handleSpokenText("Cancel alert");
+      if (!(await afterSpeech(1400))) return;
+      if (!(await walkUntil(() => state.screen !== "fire"))) return;
+      await afterSpeech(800);
+      logEvent("[Scenario 3] Completed evacuation safely.");
+    }
+
+    if (runId === scenarioRunId) {
+      activeScenario = null;
+      $("#phoneFrame")?.classList.remove("scenario-locked");
+      syncSimulatorControls();
+    }
+  },
+  togglePrefMenu(key) {
+    state.openPrefMenu = state.openPrefMenu === key ? null : key;
+    renderApp();
+    if (state.openPrefMenu) {
+      document.querySelector(".select-drawer")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  },
+  choosePref(val, el) {
+    const key = el?.dataset?.prefKey;
+    if (!key) return;
+    state[key] = key === "units" ? val : Number(val);
+    state.openPrefMenu = null;
+    persistPreferences();
+    renderApp();
+    const labels = {
+      speechRate: `Speech rate set to ${SPEECH_RATES[state.speechRate]}`,
+      frequency: `Instruction frequency set to ${INSTRUCTION_FREQUENCIES[state.frequency]}`,
+      textSize: `Text size set to ${TEXT_SIZES[state.textSize]}`,
+      units: `Distance units set to ${state.units}`
+    };
+    if (labels[key]) {
+      logEvent(labels[key]);
+      speak(labels[key]);
+    }
+  },
+  whereAmI() {
+    playEarcon("confirm", state);
+    if (["nav", "fire"].includes(state.screen) && state.nav && state.route) {
+      const step = state.route[state.nav.stepIndex];
+      const remainingTotal =
+        state.nav.feetLeft +
+        state.route.slice(state.nav.stepIndex + 1).reduce((acc, s) => acc + s.feet, 0);
+      speak(
+        `You are in ${currentLocationLabel()}. ${formatDistance(remainingTotal, state.units)} remaining to ${state.destination.name}.`
+      );
+    } else {
+      speak(`You are in ${currentLocationLabel()}.`);
+    }
+  },
   cyclePref(key) {
     if (key === "units") state.units = state.units === "Feet" ? "Meters" : "Feet";
     else if (key === "highContrast") state.highContrast = !state.highContrast;
-    else if (key === "textSize") state[key] = (state[key] + 1) % TEXT_SIZES.length;
+    else if (key === "audioChimes") {
+      state.audioChimes = !state.audioChimes;
+      if (state.audioChimes) playEarcon("confirm", state);
+      logEvent(`Audio chimes ${state.audioChimes ? "enabled" : "disabled"}.`);
+    } else if (key === "textSize") state[key] = (state[key] + 1) % TEXT_SIZES.length;
     else state[key] = (state[key] + 1) % 3;
     persistPreferences();
     renderApp();
@@ -797,12 +1141,14 @@ const actions = {
     else if (state.pinEntry.length < 4) state.pinEntry += String(val);
 
     if (state.pinEntry.length === 4) {
-      if (state.pinEntry === "1234") {
+      if (state.pinEntry === state.caretakerPin) {
         state.pinEntry = "";
         state.screen = "caretaker";
+        playEarcon("confirm", state);
         logEvent("FR-26: Caretaker PIN verified.");
       } else {
-        speak("Incorrect PIN. Try 1 2 3 4.");
+        playEarcon("alert", state);
+        speak(state.caretakerPin === "1234" ? "Incorrect PIN. Try 1 2 3 4." : "Incorrect PIN.");
         state.pinEntry = "";
       }
     }
@@ -812,8 +1158,47 @@ const actions = {
     state.contacts[idx].enabled = !state.contacts[idx].enabled;
     renderApp();
   },
+  moveContactUp(idx) {
+    const i = Number(idx);
+    if (i <= 0 || i >= state.contacts.length) return;
+    const [moved] = state.contacts.splice(i, 1);
+    state.contacts.splice(i - 1, 0, moved);
+    state.editingContactIdx = null;
+    logEvent(`Prioritized contact: ${moved.name}`);
+    renderApp();
+  },
+  startEditContact(idx) {
+    state.editingContactIdx = Number(idx);
+    state.showAddContactForm = false;
+    renderApp();
+  },
+  cancelEditContact() {
+    state.editingContactIdx = null;
+    renderApp();
+  },
+  saveEditedContact(idx) {
+    const i = Number(idx);
+    const nameEl = $("#editContactName");
+    const phoneEl = $("#editContactPhone");
+    const name = nameEl?.value.trim();
+    const phone = phoneEl?.value.trim();
+    if (name) state.contacts[i].name = name;
+    if (phone) state.contacts[i].phone = phone;
+    state.editingContactIdx = null;
+    logEvent(`Updated contact: ${state.contacts[i].name}`);
+    renderApp();
+  },
+  removeContact(idx) {
+    const i = Number(idx);
+    if (state.contacts.length <= 1) return;
+    const [removed] = state.contacts.splice(i, 1);
+    state.editingContactIdx = null;
+    logEvent(`Removed contact: ${removed.name}`);
+    renderApp();
+  },
   toggleAddContactForm() {
     state.showAddContactForm = !state.showAddContactForm;
+    state.editingContactIdx = null;
     renderApp();
   },
   saveNewContact() {
@@ -826,8 +1211,31 @@ const actions = {
     logEvent(`Added emergency contact: ${name}`);
     renderApp();
   },
+  toggleNotifyOnArrival() {
+    state.notifyOnArrival = !state.notifyOnArrival;
+    renderApp();
+  },
   toggleAskBeforeSaving() {
     state.askBeforeSaving = !state.askBeforeSaving;
+    renderApp();
+  },
+  togglePinForm() {
+    state.showPinForm = !state.showPinForm;
+    renderApp();
+  },
+  saveCaretakerPin() {
+    const pinInput = $("#newCaretakerPin")?.value.trim() || "";
+    if (!/^\d{4}$/.test(pinInput)) {
+      playEarcon("alert", state);
+      speak("PIN must be exactly 4 digits.");
+      return;
+    }
+    state.caretakerPin = pinInput;
+    state.showPinForm = false;
+    persistPreferences();
+    playEarcon("confirm", state);
+    logEvent("Caretaker PIN updated.");
+    speak("Caretaker PIN updated.");
     renderApp();
   },
   cycleDisabilityProfile() {
@@ -840,11 +1248,29 @@ const actions = {
       state.pendingCaretakerSync = true;
       logEvent("NFR-13: User moving - deferring caretaker sync until stationary.");
       speak("Changes queued. Will apply once you stop walking.");
+    } else if (state.askBeforeSaving) {
+      state.showCaretakerApproval = true;
+      speak("Please review and approve caretaker changes.");
     } else {
       persistPreferences();
+      playEarcon("confirm", state);
       logEvent("Caretaker configuration saved locally.");
       speak("Caretaker configuration saved.");
     }
+    renderApp();
+  },
+  confirmCaretakerSave() {
+    state.showCaretakerApproval = false;
+    persistPreferences();
+    playEarcon("confirm", state);
+    logEvent("FR-20: User approved and saved caretaker configuration.");
+    speak("Caretaker configuration approved and saved.");
+    renderApp();
+  },
+  cancelCaretakerSave() {
+    stopSpeech();
+    state.showCaretakerApproval = false;
+    logEvent("Caretaker save cancelled by user.");
     renderApp();
   },
   downloadMap() {
@@ -868,8 +1294,12 @@ const actions = {
     });
     state.strideFeet = +(10 / steps).toFixed(2);
     persistPreferences();
-    logEvent(`Step calibration: ${steps} steps over 10 ft (~${state.strideFeet} ft/step).`);
-    speak(`Calibration saved. Your stride is about ${state.strideFeet} feet.`);
+    const strideDisplay =
+      state.units === "Meters"
+        ? `${(state.strideFeet * 0.3048).toFixed(2)} meters`
+        : `${state.strideFeet} feet`;
+    logEvent(`Step calibration: ${steps} steps over ${formatDistance(10, state.units)} (~${strideDisplay}/step).`);
+    speak(`Calibration saved. Your stride is about ${strideDisplay}.`);
     renderApp();
   }
 };
@@ -903,6 +1333,7 @@ const BACK_TARGETS = {
 };
 
 function syncSimulatorControls() {
+  const locked = !!activeScenario;
   const isNav = state.screen === "nav";
   const isFire = state.screen === "fire";
   const isObs = state.screen === "obs";
@@ -910,34 +1341,53 @@ function syncSimulatorControls() {
   const isEmg = state.screen === "emg";
   const canWalk = isNav || isFire;
 
-  $("#btnWalk").disabled = !canWalk;
-  $("#btnAutoWalk").disabled = !canWalk;
+  $("#btnWalk").disabled = locked || !canWalk;
+  $("#btnWalk").textContent = `Walk ${formatDistance(10, state.units)}`;
+  $("#btnAutoWalk").disabled = locked || !canWalk;
   $("#btnAutoWalk").classList.toggle("active", !!state.autoWalkTimer);
+  $("#btnAutoWalk").textContent = state.autoWalkTimer ? "Pause auto-walk" : "Auto-walk";
 
-  $("#btnObstacle").disabled = !isNav;
-  $("#btnClearObstacle").disabled = !isObs;
-  $("#btnHazard").disabled = !isNav;
+  $("#btnObstacle").disabled = locked || !isNav;
+  $("#btnObstacle").textContent = `Obstacle ${formatDistance(3, state.units)} ahead`;
+  $("#btnClearObstacle").disabled = locked || !isObs;
+  $("#btnHazard").disabled = locked || !isNav;
+  $("#btnClearHazards").disabled = locked || state.reportedHazards.length === 0;
+  $("#btnClearHazards").textContent = `Clear hazards (${state.reportedHazards.length})`;
 
+  $("#btnClosure").disabled = locked;
   $("#btnClosure").classList.toggle("active", !!state.hallwayClosed);
   $("#btnClosure").textContent = state.hallwayClosed ? "Reopen side hallway" : "Close side hallway";
 
+  $("#btnCrowd").disabled = locked;
   $("#btnCrowd").classList.toggle("active", !!state.highCrowd);
   $("#btnCrowd").textContent = state.highCrowd ? "Clear crowd density" : "High crowd density";
 
-  $("#btnSignal").disabled = !(isNav || isSig);
+  $("#btnSignal").disabled = locked || !(isNav || isSig);
   $("#btnSignal").classList.toggle("active", !state.signalAvailable);
   $("#btnSignal").textContent = state.signalAvailable ? "Drop signal" : "Restore signal";
 
-  $("#btnFire").disabled = isFire || isEmg;
+  $("#btnFire").disabled = locked || isFire || isEmg;
   $("#btnFire").classList.toggle("active", isFire);
 
   const calBlocked = state.showSafetyGate || ["emg", "fire", "sig", "obs", "haz", "reroute"].includes(state.screen);
-  $("#btnCalPrompt").disabled = calBlocked;
+  $("#btnCalPrompt").disabled = locked || calBlocked;
   $("#btnCalPrompt").classList.toggle("active", !!state.showCalendarPrompt);
 
-  $("#btnFall").disabled = isEmg;
-  $("#btnBump").disabled = isEmg;
+  $("#btnFall").disabled = locked || isEmg;
+  $("#btnBump").disabled = locked || isEmg;
+  $("#btnSensors").disabled = locked;
   $("#btnSensors").classList.toggle("active", !!state.sensorsEnabled);
+
+  $("#speechInput").disabled = locked;
+  $("#btnSpeech").disabled = locked;
+
+  $("#btnScenClosure").disabled = locked && activeScenario !== "closure";
+  $("#btnScenObstacle").disabled = locked && activeScenario !== "obstacle";
+  $("#btnScenCrisis").disabled = locked && activeScenario !== "crisis";
+  $("#btnScenClosure").classList.toggle("active", activeScenario === "closure");
+  $("#btnScenObstacle").classList.toggle("active", activeScenario === "obstacle");
+  $("#btnScenCrisis").classList.toggle("active", activeScenario === "crisis");
+  $("#btnStopScenario").disabled = !locked;
 }
 
 function renderApp() {
@@ -946,6 +1396,7 @@ function renderApp() {
   frame.style.setProperty("--font-scale", scale);
   frame.classList.toggle("high-contrast", !!state.highContrast);
   frame.classList.toggle("fire-mode", state.screen === "fire");
+  frame.classList.toggle("scenario-locked", !!activeScenario);
 
   const pillText =
     state.screen === "nav"
@@ -999,7 +1450,8 @@ function renderApp() {
 
   if (!screenChanged && (state.screen === "nav" || state.screen === "fire") && state.nav) {
     const step = state.route[state.nav.stepIndex];
-    const navKey = `${state.screen}|${state.nav.stepIndex}|${state.muted}|${state.inQuietZone}|${state.mapViewFloor}|${state.hallwayClosed}|${state.highCrowd}|${state.units}|${state.textSize}|${state.strideFeet}`;
+    const startedStep = step.type === "walk" && state.nav.feetLeft < step.feet;
+    const navKey = `${state.screen}|${state.nav.stepIndex}|${startedStep}|${state.muted}|${state.inQuietZone}|${state.mapViewFloor}|${state.hallwayClosed}|${state.highCrowd}|${state.units}|${state.textSize}|${state.strideFeet}`;
     if (navKey === lastScreenPatchKey) {
       const metricEl = appScreen.querySelector("[data-nav-metric]");
       if (metricEl) {
@@ -1008,6 +1460,11 @@ function renderApp() {
       const stepsEl = appScreen.querySelector("[data-nav-steps]");
       if (stepsEl && state.strideFeet && state.nav.feetLeft && step.type === "walk") {
         stepsEl.textContent = `~${Math.round(state.nav.feetLeft / state.strideFeet)} steps`;
+      }
+      const nextTurnEl = appScreen.querySelector("[data-next-turn]");
+      if (nextTurnEl) {
+        const nextStep = state.route[state.nav.stepIndex + 1];
+        nextTurnEl.textContent = formatUpcomingTurn(nextStep, state.nav.feetLeft, state.units, state.destination.name);
       }
       const pos = getCurrentCoordinates(state);
       const dotEl = appScreen.querySelector("[data-user-dot]");
@@ -1025,11 +1482,15 @@ function renderApp() {
   } else if (!screenChanged && state.screen === "emg" && !state.alertSent) {
     const emgKey = `emg|${state.alertSent}|${state.emergencyReason}|${state.disabilityProfile}|${state.textSize}`;
     if (emgKey === lastScreenPatchKey) {
-      const ringEl = appScreen.querySelector("[data-emg-ring]");
-      if (ringEl) {
-        ringEl.textContent = state.countdown;
-        patchedInPlace = true;
+      const countEl = appScreen.querySelector("[data-emg-count]");
+      const progressEl = appScreen.querySelector("[data-emg-progress]");
+      if (countEl) countEl.textContent = state.countdown;
+      if (progressEl) {
+        const circumference = 339.292;
+        const offset = (circumference * (1 - Math.max(0, Math.min(1, state.countdown / 10)))).toFixed(2);
+        progressEl.setAttribute("stroke-dashoffset", offset);
       }
+      if (countEl || progressEl) patchedInPlace = true;
     }
   }
 
@@ -1044,8 +1505,8 @@ function renderApp() {
       lastScreenHtml = compareHtml;
     }
     lastScreenPatchKey =
-      state.screen === "nav" || state.screen === "fire"
-        ? `${state.screen}|${state.nav?.stepIndex}|${state.muted}|${state.inQuietZone}|${state.mapViewFloor}|${state.hallwayClosed}|${state.highCrowd}|${state.units}|${state.textSize}|${state.strideFeet}`
+      (state.screen === "nav" || state.screen === "fire") && state.nav
+        ? `${state.screen}|${state.nav.stepIndex}|${state.route[state.nav.stepIndex].type === "walk" && state.nav.feetLeft < state.route[state.nav.stepIndex].feet}|${state.muted}|${state.inQuietZone}|${state.mapViewFloor}|${state.hallwayClosed}|${state.highCrowd}|${state.units}|${state.textSize}|${state.strideFeet}`
         : state.screen === "emg"
         ? `emg|${state.alertSent}|${state.emergencyReason}|${state.disabilityProfile}|${state.textSize}`
         : "";
@@ -1112,10 +1573,40 @@ function renderApp() {
       </button>
       <button class="btn-secondary" data-action="dismissCalendarPrompt">Dismiss</button>
     `;
+  } else if (state.showCaretakerApproval) {
+    const activeNames = state.contacts.filter((c) => c.enabled).map((c) => c.name.split(" - ")[0]);
+    nextModalHtml = `
+      <div class="hero-icon-box"><span class="icon" style="font-size:2em">verified_user</span></div>
+      <div class="eyebrow text-center">User Approval Required</div>
+      <h2 class="text-center">Save Caretaker Changes?</h2>
+      <p class="subtext text-center">Confirm updating your safety profile and emergency contacts.</p>
+      <div class="info-card">
+        <div><b>Active Contacts (${activeNames.length}):</b> ${activeNames.length ? activeNames.join(", ") : "None"}</div>
+        <div class="subtext"><b>Profile:</b> ${state.disabilityProfile}</div>
+        <div class="subtext"><b>Arrival Check-In:</b> ${state.notifyOnArrival ? "Enabled" : "Off"}</div>
+      </div>
+      <button class="btn-primary" data-action="confirmCaretakerSave">Approve &amp; Save</button>
+      <button class="btn-secondary" data-action="cancelCaretakerSave">Cancel</button>
+    `;
   }
-  if (nextModalHtml !== lastModalHtml) {
+  const modalChanged = nextModalHtml !== lastModalHtml;
+  if (modalChanged) {
     $("#modalOverlay").innerHTML = nextModalHtml;
     lastModalHtml = nextModalHtml;
+  }
+
+  if (modalChanged && nextModalHtml) {
+    const modalHeading = $("#modalOverlay h2");
+    if (modalHeading) {
+      modalHeading.setAttribute("tabindex", "-1");
+      modalHeading.focus({ preventScroll: true });
+    }
+  } else if (screenChanged && !nextModalHtml) {
+    const screenHeading = appScreen.querySelector("h2");
+    if (screenHeading) {
+      screenHeading.setAttribute("tabindex", "-1");
+      screenHeading.focus({ preventScroll: true });
+    }
   }
 
   syncSimulatorControls();
@@ -1125,7 +1616,12 @@ function renderApp() {
 document.addEventListener("click", (e) => {
   const btn = e.target.closest("[data-action]");
   if (btn && !btn.disabled && actions[btn.dataset.action]) {
-    actions[btn.dataset.action](btn.dataset.val);
+    actions[btn.dataset.action](btn.dataset.val, btn);
+    return;
+  }
+  if (state.openPrefMenu && !e.target.closest(".select-wrap")) {
+    state.openPrefMenu = null;
+    renderApp();
   }
 });
 
@@ -1138,6 +1634,7 @@ document.addEventListener("dblclick", (e) => {
 document.addEventListener("input", (e) => {
   if (e.target.dataset.input === "volume") {
     state.volume = Number(e.target.value);
+    e.target.style.setProperty("--pct", `${state.volume}%`);
     const label = document.querySelector("[data-volume-label]");
     if (label) label.textContent = `${state.volume}%`;
     renderLiveBanner(state, $("#liveBanner"));
@@ -1183,7 +1680,30 @@ document.addEventListener("change", (e) => {
 });
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && e.target.id === "speechInput") actions.submitSpeech();
+  if (e.key === "Enter" && e.target.id === "speechInput") return actions.submitSpeech();
+  if (["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
+
+  const key = e.key.toLowerCase();
+  if (key === "r") {
+    actions.repeatInstruction();
+  } else if (key === "l") {
+    actions.whereAmI();
+  } else if (key === "m" && ["nav", "fire"].includes(state.screen)) {
+    actions.toggleMute();
+  } else if (key === "w" && ["nav", "fire"].includes(state.screen)) {
+    actions.walk();
+  } else if (key === "h" && state.screen === "nav") {
+    actions.reportHazard();
+  } else if (e.key === "Escape") {
+    if (state.openPrefMenu) {
+      state.openPrefMenu = null;
+      renderApp();
+    } else if (state.showCaretakerApproval) actions.cancelCaretakerSave();
+    else if (state.showCalendarPrompt) actions.dismissCalendarPrompt();
+    else if (state.screen === "haz") actions.cancelHazardPin();
+    else if (state.screen === "fire") actions.dismissFireAlarm();
+    else if (BACK_TARGETS[state.screen]) actions.goScreen(BACK_TARGETS[state.screen]);
+  }
 });
 
 $("#appScreen").addEventListener(
@@ -1199,6 +1719,7 @@ $("#appScreen").addEventListener(
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
+    clearScenario(true);
     stopAutoWalk();
     stopSpeech();
     stopHaptics();
